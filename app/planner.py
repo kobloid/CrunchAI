@@ -2,16 +2,21 @@
 planner.py
 
 Purpose:
-    The "brain" of CrunchAI. Owns the Gemini API call, the prompt text, and
-    turning a student's raw situation (or a progress update) into a
-    validated plan. Intentionally knows nothing about FastAPI or SQLite —
-    it takes plain data in and returns validated Pydantic models out, so it
-    can be tested and reused on its own.
+    The "brain" of CrunchAI. Owns the Gemini API call, prompt text, and
+    three things: turning a situation into a plan (generate_plan), revising
+    a plan after progress (replan), and the Crunch Mode study chat
+    (answer_question) — a NotebookLM-style "answer grounded in this
+    context" Q&A, minus file uploads for now. Intentionally knows nothing
+    about FastAPI or SQLite — it takes plain data in and returns validated
+    Pydantic models (or plain text, for chat) out, so it can be tested and
+    reused on its own.
 
 Interacts with:
-    - models.py    -> validates Gemini's raw JSON against PlanOutput
-    - main.py      -> routes call generate_plan() / replan(), then hand the
-                      result to db.py to persist
+    - models.py    -> validates Gemini's raw JSON against PlanOutput for
+                      generate_plan()/replan(); answer_question() returns
+                      plain text instead, wrapped in AskResponse by main.py
+    - main.py      -> routes call generate_plan() / replan() / answer_question(),
+                      then hand results to db.py to persist
     - db.py        -> NOT imported here on purpose; main.py is the glue
                       between planner output and storage
 
@@ -126,6 +131,55 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
     )
     raw = _call_gemini(prompt)
     return PlanOutput.model_validate(raw)
+
+
+ASK_SYSTEM_PROMPT = """You are CrunchAI's study helper, active during a focused study session.
+Your job is to help the student understand and work through their material right now —
+explain concepts, quiz them, check their reasoning, and answer questions directly.
+Keep answers focused and study-session appropriate: clear, not overly long, and oriented
+toward helping them actually learn this before their deadline — not a generic essay.
+
+Current task: {task_title}
+{topic_context}
+"""
+
+
+def answer_question(task: dict, topic: dict | None, question: str, history: list[dict]) -> str:
+    """
+    Answer a student's question during Crunch Mode, grounded in the current
+    task and (optionally) a topic's saved notes — the NotebookLM-style
+    "answer using this context" pattern, minus file uploads for now.
+
+    task: a task row/dict with at least 'title' and 'subject'
+    topic: a topic row/dict with 'name' and 'notes', or None if no topic
+           was selected
+    question: the student's latest message
+    history: prior turns in this chat, as [{"role": "user"/"assistant", "content": ...}, ...]
+    """
+    topic_context = ""
+    if topic and topic.get("notes"):
+        topic_context = f"\nContext notes for {topic['name']}:\n{topic['notes']}\n"
+    elif topic:
+        topic_context = f"\nTopic: {topic['name']} (no additional notes provided)\n"
+
+    system_prompt = ASK_SYSTEM_PROMPT.format(
+        task_title=task.get("title", "Unknown task"),
+        topic_context=topic_context,
+    )
+
+    # Fold history + the new question into one prompt. This is plain text,
+    # not the structured-JSON pattern generate_plan()/replan() use — a study
+    # chat should read like a chat, not a schema.
+    convo_lines = [system_prompt, "\n--- Conversation so far ---"]
+    for turn in history:
+        speaker = "Student" if turn.get("role") == "user" else "CrunchAI"
+        convo_lines.append(f"{speaker}: {turn.get('content', '')}")
+    convo_lines.append(f"Student: {question}")
+    convo_lines.append("CrunchAI:")
+
+    prompt = "\n".join(convo_lines)
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
+    return response.text.strip()
 
 
 if __name__ == "__main__":

@@ -31,6 +31,12 @@
       - Warm/Cool theme toggle            -> fully real, pure CSS
         (this page doesn't have its own toggle in the header — add one
         here too if you want it switchable mid-app, not just on landing).
+      - Crunch Mode chat / topics         -> REAL. POST /ask answers
+        questions grounded in the current task + selected topic's notes;
+        GET/POST /topics manage the topic list. Chat history is kept in
+        memory only (app.js state), not persisted or sent with each
+        request beyond the current session — reloading the page clears it.
+        File pasting as a topic source is planned but not built yet.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -44,7 +50,7 @@
 
   <section class="view-app-page">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">✦</span> Crunch<span class="brand-accent">AI</span></div>
+      <a href="index.html" class="brand brand-link"><span class="brand-mark">✦</span> Crunch<span class="brand-accent">AI</span></a>
       <nav class="sidebar-nav">
         <button class="nav-item active" data-nav="situation">📋 Situation</button>
         <button class="nav-item" data-nav="plan" disabled>⇄ Recovery plan</button>
@@ -164,41 +170,65 @@
         </div>
       </section>
 
-      <!-- ---- Crunch Mode ---- -->
+      <!-- ---- Crunch Mode (AI study helper, chat-first) ---- -->
       <section id="panel-crunch" class="panel">
         <div class="panel-header">
           <div class="eyebrow">CRUNCH MODE</div>
-          <h2>One task. Nothing else.</h2>
+          <h2>Study this, right now.</h2>
         </div>
         <div class="panel-body two-col">
-          <div class="card main-card center-card">
+          <div class="card main-card chat-card">
             <div class="crunch-top-row">
               <span class="tag tag-urgent" id="crunch-badge">URGENT</span>
-              <span class="muted">🔕 Distraction-free</span>
+              <span class="muted" id="crunch-task-index">CURRENT TASK · 1 OF 1</span>
             </div>
-            <div class="eyebrow" id="crunch-task-index">CURRENT TASK · 1 OF 1</div>
-            <h2 id="crunch-task-title">—</h2>
+            <h3 id="crunch-task-title">—</h3>
             <p class="muted" id="crunch-task-desc"></p>
 
-            <div class="timer-ring">
-              <div class="timer-text" id="timer-display">00:00</div>
-              <div class="timer-sub" id="timer-status">Ready to start</div>
+            <div class="chat-window" id="chat-window">
+              <div class="chat-message chat-assistant">
+                <strong>CrunchAI</strong>
+                <p>Ask me anything about this task — explain a concept, quiz yourself, or check your reasoning. I'll use the topic notes on the right if you've added any.</p>
+              </div>
             </div>
 
-            <div class="timer-progress"><div class="timer-progress-fill" id="timer-progress-fill"></div></div>
-            <div class="muted small" id="timer-elapsed-note">0 minutes focused</div>
-
-            <div class="crunch-actions">
-              <button class="btn-outline" id="btn-pause">⏸ Pause</button>
-              <button class="btn-primary" id="btn-complete-task">✓ Complete task</button>
-              <button class="btn-icon" id="btn-reset-timer" title="Reset timer">↺</button>
+            <div class="chat-input-row">
+              <textarea id="chat-input" placeholder="Ask a question about this task..." rows="2"></textarea>
+              <button class="btn-primary" id="btn-send-chat">Send</button>
             </div>
           </div>
 
           <aside class="side-card">
-            <div class="side-card-head"><h4>This block</h4><span id="crunch-block-time" class="muted"></span></div>
-            <div id="crunch-block-list"></div>
-            <div class="callout-card callout-green">
+            <div class="side-card-head"><h4>Topic</h4></div>
+            <select id="topic-select">
+              <option value="">No topic selected</option>
+            </select>
+            <button class="link-btn" id="btn-new-topic-toggle" style="margin-top:10px;">+ Add new topic</button>
+
+            <div id="new-topic-form" style="display:none; margin-top:12px;">
+              <label class="field-label">Topic name</label>
+              <input type="text" id="new-topic-name" placeholder="e.g. Biology 201" />
+              <label class="field-label">Context notes <span class="optional-tag">Optional</span></label>
+              <textarea id="new-topic-notes" placeholder="Paste any notes you want the AI to reference..." rows="3"></textarea>
+              <button class="btn-primary" id="btn-save-topic" style="margin-top:10px;">Save topic</button>
+            </div>
+
+            <div class="side-card-head" style="margin-top:24px;">
+              <h4>Focus timer</h4>
+              <span id="crunch-block-time" class="muted"></span>
+            </div>
+            <div class="timer-compact">
+              <div class="timer-compact-display" id="timer-display">00:00</div>
+              <div class="muted small" id="timer-status">Ready to start</div>
+              <div class="timer-progress"><div class="timer-progress-fill" id="timer-progress-fill"></div></div>
+            </div>
+            <div class="crunch-actions crunch-actions-compact">
+              <button class="btn-outline" id="btn-pause">▶ Start</button>
+              <button class="btn-icon" id="btn-reset-timer" title="Reset timer">↺</button>
+            </div>
+            <button class="btn-primary" id="btn-complete-task" style="width:100%; margin-top:14px;">✓ Complete task</button>
+
+            <div class="callout-card callout-green" style="margin-top:20px;">
               <div class="callout-title">🌱 Progress, not perfection.</div>
               <p class="muted">If you don't finish, that's useful information. We'll adjust the plan.</p>
             </div>

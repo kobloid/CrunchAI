@@ -3,16 +3,17 @@ db.py
 
 Purpose:
     Owns all SQLite access for CrunchAI: the schema definition and every
-    insert/select/update against the tasks, sessions, and plans tables.
-    Nothing outside this file should write raw SQL.
+    insert/select/update against the tasks, sessions, plans, and topics
+    tables. Nothing outside this file should write raw SQL.
 
 Interacts with:
     - main.py      -> routes call these functions instead of touching
                       sqlite3 directly
-    - models.py    -> rows returned here get shaped into PlanOut / TaskOut
-                      before going back to the client
+    - models.py    -> rows returned here get shaped into PlanOut / TaskOut /
+                      Topic before going back to the client
     - planner.py   -> does NOT import this directly; main.py is the glue
-                      between planner output and db writes
+                      between planner output (including answer_question())
+                      and db reads/writes
 """
 
 import sqlite3
@@ -47,6 +48,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     actual_minutes INTEGER,
     outcome TEXT,
     FOREIGN KEY (task_id) REFERENCES tasks (id)
+);
+
+CREATE TABLE IF NOT EXISTS topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    notes TEXT
 );
 """
 
@@ -180,3 +187,31 @@ def create_session(task_id: int, actual_minutes: int, outcome: str):
                VALUES (?, CURRENT_TIMESTAMP, ?, ?)""",
             (task_id, actual_minutes, outcome),
         )
+
+
+# ---- Topics (subject + optional AI context notes) ----
+
+def create_topic(name: str, notes: str | None) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO topics (name, notes) VALUES (?, ?)",
+            (name, notes),
+        )
+        return cur.lastrowid
+
+
+def get_all_topics():
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM topics ORDER BY name ASC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_topic(topic_id: int):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_topic_notes(topic_id: int, notes: str | None):
+    with get_connection() as conn:
+        conn.execute("UPDATE topics SET notes = ? WHERE id = ?", (notes, topic_id))

@@ -5,24 +5,31 @@ Purpose:
     The FastAPI app itself. This is the glue layer: routes accept requests
     validated by models.py, call planner.py to think, and call db.py to
     persist/read state. Contains no Gemini logic and no raw SQL of its own.
+    Also owns /topics (subject + optional AI context notes) and /ask (the
+    Crunch Mode study-helper chat).
 
     The frontend (app/static/) is mounted at the bottom of this file, after
-    every API route, so it never shadows /situation, /plan, or /tasks/{id}.
+    every API route, so it never shadows /situation, /plan, /tasks/{id},
+    /topics, or /ask.
 
 Interacts with:
     - models.py    -> request bodies and response_models on every route
-    - planner.py   -> generate_plan() / replan() for the actual AI work
+    - planner.py   -> generate_plan() / replan() / answer_question()
     - db.py        -> create_plan / create_task / get_latest_plan /
                       get_pending_tasks_for_plan / update_task_status /
-                      mark_tasks_replaced / update_plan_meta / create_session
-    - app/static/  -> index.html / style.css / app.js, served as-is
+                      mark_tasks_replaced / update_plan_meta / create_session /
+                      create_topic / get_all_topics / get_topic / update_topic_notes
+    - app/static/  -> index.html (landing) / app.html (the app) / style.css / app.js
 """
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from app import db, planner
-from app.models import SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut
+from app.models import (
+    SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut,
+    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse,
+)
 
 app = FastAPI(title="CrunchAI")
 
@@ -112,6 +119,43 @@ def _load_plan_out(plan_id: int) -> PlanOut:
         summary=plan_row["summary"],
         tasks=[TaskOut(**t) for t in visible_tasks],
     )
+
+
+# ---- Topics ----
+
+@app.get("/topics", response_model=list[Topic])
+def list_topics():
+    return [Topic(**t) for t in db.get_all_topics()]
+
+
+@app.post("/topics", response_model=Topic)
+def create_topic(topic: TopicCreate):
+    topic_id = db.create_topic(topic.name, topic.notes)
+    return Topic(id=topic_id, name=topic.name, notes=topic.notes)
+
+
+@app.patch("/topics/{topic_id}", response_model=Topic)
+def update_topic(topic_id: int, update: TopicUpdate):
+    existing = db.get_topic(topic_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    db.update_topic_notes(topic_id, update.notes)
+    return Topic(id=topic_id, name=existing["name"], notes=update.notes)
+
+
+# ---- AI study helper (Crunch Mode chat) ----
+
+@app.post("/ask", response_model=AskResponse)
+def ask_study_helper(request: AskRequest):
+    task = db.get_task(request.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    topic = db.get_topic(request.topic_id) if request.topic_id else None
+
+    history = [{"role": m.role, "content": m.content} for m in request.history]
+    answer = planner.answer_question(task, topic, request.question, history)
+    return AskResponse(answer=answer)
 
 
 # Serve the frontend last, so it doesn't shadow the API routes above.

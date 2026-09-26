@@ -173,11 +173,75 @@ document.getElementById("btn-enter-crunch").addEventListener("click", () => {
     showPanel("crunch");
 });
 
-// ---------------- Crunch Mode panel ----------------
+// ---------------- Crunch Mode: topics, timer, chat ----------------
+
+const chatState = {
+    history: [], // [{role: "user"|"assistant", content: "..."}]
+    selectedTopicId: null,
+};
 
 function getActiveTasks() {
     return state.currentPlan.tasks.filter((t) => t.status !== "replaced");
 }
+
+async function loadTopicsIntoDropdown() {
+    const select = document.getElementById("topic-select");
+    try {
+        const res = await fetch("/topics");
+        const topics = await res.json();
+        select.innerHTML = '<option value="">No topic selected</option>';
+        topics.forEach((t) => {
+            const opt = document.createElement("option");
+            opt.value = t.id;
+            opt.textContent = t.name;
+            select.appendChild(opt);
+        });
+    } catch (err) {
+        console.error("Couldn't load topics:", err);
+    }
+}
+
+document.getElementById("topic-select").addEventListener("change", (e) => {
+    chatState.selectedTopicId = e.target.value ? parseInt(e.target.value, 10) : null;
+});
+
+document.getElementById("btn-new-topic-toggle").addEventListener("click", () => {
+    const form = document.getElementById("new-topic-form");
+    form.style.display = form.style.display === "none" ? "block" : "none";
+});
+
+document.getElementById("btn-save-topic").addEventListener("click", async () => {
+    const name = document.getElementById("new-topic-name").value.trim();
+    const notes = document.getElementById("new-topic-notes").value.trim();
+    if (!name) {
+        alert("Give the topic a name first.");
+        return;
+    }
+
+    const btn = document.getElementById("btn-save-topic");
+    btn.disabled = true;
+    try {
+        const res = await fetch("/topics", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, notes: notes || null }),
+        });
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const topic = await res.json();
+
+        await loadTopicsIntoDropdown();
+        document.getElementById("topic-select").value = topic.id;
+        chatState.selectedTopicId = topic.id;
+
+        document.getElementById("new-topic-name").value = "";
+        document.getElementById("new-topic-notes").value = "";
+        document.getElementById("new-topic-form").style.display = "none";
+    } catch (err) {
+        alert(`Couldn't save topic: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+    }
+});
 
 function startCrunchModeForCurrentTask() {
     const tasks = getActiveTasks();
@@ -187,11 +251,18 @@ function startCrunchModeForCurrentTask() {
     document.getElementById("crunch-badge").textContent = state.currentPlan.urgency.toUpperCase();
     document.getElementById("crunch-task-index").textContent = `CURRENT TASK · 1 OF ${tasks.length}`;
     document.getElementById("crunch-task-title").textContent = task.title;
-
     document.getElementById("crunch-block-time").textContent = `${task.duration_minutes} min`;
-    document.getElementById("crunch-block-list").innerHTML = `
-    <div class="block-item"><span class="block-num">1</span><span>${escapeHtml(task.title)}</span><span class="block-time">${task.duration_minutes} min</span></div>`;
 
+    // Reset chat for the new task.
+    chatState.history = [];
+    const chatWindow = document.getElementById("chat-window");
+    chatWindow.innerHTML = `
+    <div class="chat-message chat-assistant">
+      <strong>CrunchAI</strong>
+      <p>Ask me anything about "${escapeHtml(task.title)}" — explain a concept, quiz yourself, or check your reasoning. I'll use the topic notes on the right if you've added any.</p>
+    </div>`;
+
+    loadTopicsIntoDropdown();
     resetTimer(task.duration_minutes * 60);
 }
 
@@ -214,8 +285,6 @@ function updateTimerDisplay() {
         ? 100 - (state.timer.remainingSeconds / state.timer.totalSeconds) * 100
         : 0;
     document.getElementById("timer-progress-fill").style.width = `${pct}%`;
-    const elapsedMin = Math.floor(state.timer.elapsedSeconds / 60);
-    document.getElementById("timer-elapsed-note").textContent = `${elapsedMin} minute${elapsedMin === 1 ? "" : "s"} focused`;
 }
 
 function toggleTimer() {
@@ -250,6 +319,75 @@ document.getElementById("btn-complete-task").addEventListener("click", () => {
     clearInterval(state.timer.intervalId);
     state.timer.running = false;
     showPanel("checkin");
+});
+
+// ---- Chat (the actual AI study helper) ----
+
+function appendChatMessage(role, content) {
+    const chatWindow = document.getElementById("chat-window");
+    const div = document.createElement("div");
+    div.className = `chat-message ${role === "user" ? "chat-user" : "chat-assistant"}`;
+    div.innerHTML = `<strong>${role === "user" ? "You" : "CrunchAI"}</strong><p>${escapeHtml(content)}</p>`;
+    chatWindow.appendChild(div);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById("chat-input");
+    const question = input.value.trim();
+    if (!question) return;
+
+    const tasks = getActiveTasks();
+    const task = tasks[0];
+    if (!task) return;
+
+    appendChatMessage("user", question);
+    chatState.history.push({ role: "user", content: question });
+    input.value = "";
+
+    const chatWindow = document.getElementById("chat-window");
+    const loadingEl = document.createElement("div");
+    loadingEl.className = "chat-message chat-loading";
+    loadingEl.textContent = "CrunchAI is thinking...";
+    chatWindow.appendChild(loadingEl);
+    chatWindow.scrollTop = chatWindow.scrollHeight;
+
+    const sendBtn = document.getElementById("btn-send-chat");
+    sendBtn.disabled = true;
+
+    try {
+        const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                task_id: task.id,
+                topic_id: chatState.selectedTopicId,
+                question,
+                // Send history *before* this question — the backend appends the
+                // question itself when building the prompt.
+                history: chatState.history.slice(0, -1),
+            }),
+        });
+        loadingEl.remove();
+        if (!res.ok) throw new Error(`Server returned ${res.status}`);
+        const data = await res.json();
+
+        appendChatMessage("assistant", data.answer);
+        chatState.history.push({ role: "assistant", content: data.answer });
+    } catch (err) {
+        loadingEl.remove();
+        appendChatMessage("assistant", `(Something went wrong: ${err.message})`);
+    } finally {
+        sendBtn.disabled = false;
+    }
+}
+
+document.getElementById("btn-send-chat").addEventListener("click", sendChatMessage);
+document.getElementById("chat-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
 });
 
 // ---------------- Check-in panel ----------------

@@ -73,3 +73,38 @@ class PlanOut(BaseModel):
     urgency: Urgency
     summary: str
     tasks: list[TaskOut]
+
+
+# ---- Topics (subject + optional context notes for the AI study helper) ----
+
+class TopicCreate(BaseModel):
+    name: str = Field(..., description="Subject label, e.g. 'Biology 201'")
+    notes: Optional[str] = Field(None, description="Free-text context the AI should ground answers in")
+
+
+class TopicUpdate(BaseModel):
+    notes: Optional[str] = None
+
+
+class Topic(BaseModel):
+    id: int
+    name: str
+    notes: Optional[str] = None
+
+
+# ---- AI study helper (Crunch Mode chat, NotebookLM-style Q&A) ----
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class AskRequest(BaseModel):
+    task_id: int
+    topic_id: Optional[int] = None
+    question: str
+    history: list[ChatMessage] = Field(default_factory=list)
+
+
+class AskResponse(BaseModel):
+    answer: str
