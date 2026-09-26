@@ -1,0 +1,113 @@
+"""
+main.py
+
+Purpose:
+    The FastAPI app itself. This is the glue layer: routes accept requests
+    validated by models.py, call planner.py to think, and call db.py to
+    persist/read state. Contains no Gemini logic and no raw SQL of its own.
+
+    No frontend is mounted here on purpose — hit these routes directly via
+    /docs, curl, or httpie while you're tweaking the backend. Add the
+    static mount back once there's an actual frontend to serve.
+
+Interacts with:
+    - models.py    -> request bodies and response_models on every route
+    - planner.py   -> generate_plan() / replan() for the actual AI work
+    - db.py        -> create_plan / create_task / get_latest_plan /
+                      get_pending_tasks_for_plan / update_task_status /
+                      mark_tasks_replaced / update_plan_meta / create_session
+"""
+
+from fastapi import FastAPI, HTTPException
+
+from app import db, planner
+from app.models import SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut
+
+app = FastAPI(title="CrunchAI (backend-only)")
+
+
+@app.on_event("startup")
+def on_startup():
+    db.init_db()
+
+
+@app.post("/situation", response_model=PlanOut)
+def submit_situation(situation: SituationInput):
+    """Generate a brand-new plan from the student's described situation."""
+    plan = planner.generate_plan(situation.description, situation.available_minutes)
+
+    plan_id = db.create_plan(
+        available_minutes=situation.available_minutes,
+        urgency=plan.urgency.value,
+        summary=plan.summary,
+    )
+    for task in plan.tasks:
+        db.create_task(plan_id, task.title, task.duration_minutes, task.priority)
+
+    return _load_plan_out(plan_id)
+
+
+@app.get("/plan", response_model=PlanOut)
+def get_current_plan():
+    """Return the most recently generated plan, with its tasks."""
+    plan_row = db.get_latest_plan()
+    if not plan_row:
+        raise HTTPException(status_code=404, detail="No plan yet. POST /situation first.")
+    return _load_plan_out(plan_row["id"])
+
+
+@app.patch("/tasks/{task_id}")
+def update_task(task_id: int, update: TaskUpdate):
+    """
+    Mark a task's status, log the session, and — if the plan isn't
+    finished — trigger a replan for whatever's left.
+    """
+    task_row = db.get_task(task_id)
+    if not task_row:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    db.update_task_status(task_id, update.status.value)
+    if update.actual_minutes is not None:
+        db.create_session(task_id, update.actual_minutes, update.status.value)
+
+    # If the task is still just "pending" or "in_progress" there's nothing to replan.
+    if update.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
+        return {"ok": True, "replanned": False}
+
+    plan_id = task_row["plan_id"]
+    remaining = db.get_pending_tasks_for_plan(plan_id, exclude_task_id=task_id)
+
+    if not remaining:
+        return {"ok": True, "replanned": False, "plan_complete": True}
+
+    minutes_left = sum(t["duration_minutes"] for t in remaining)
+    revised = planner.replan(
+        remaining_tasks=remaining,
+        last_update={
+            "title": task_row["title"],
+            "status": update.status.value,
+            "actual_minutes": update.actual_minutes,
+        },
+        minutes_left=minutes_left,
+    )
+
+    db.mark_tasks_replaced([t["id"] for t in remaining])
+    db.update_plan_meta(plan_id, revised.urgency.value, revised.summary)
+    for task in revised.tasks:
+        db.create_task(plan_id, task.title, task.duration_minutes, task.priority)
+
+    return {"ok": True, "replanned": True, "plan": _load_plan_out(plan_id)}
+
+
+def _load_plan_out(plan_id: int) -> PlanOut:
+    plan_row = db.get_plan(plan_id)
+    all_tasks = db.get_tasks_for_plan(plan_id)
+    # Only show what's currently actionable/visible: hide replaced tasks,
+    # since they've been superseded by whatever came out of the last replan.
+    visible_tasks = [t for t in all_tasks if t["status"] != "replaced"]
+    return PlanOut(
+        id=plan_row["id"],
+        urgency=plan_row["urgency"],
+        summary=plan_row["summary"],
+        tasks=[TaskOut(**t) for t in visible_tasks],
+    )
