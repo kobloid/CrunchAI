@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
 pydantic
-google-generativeai
+google-genai
 python-dotenv
 pytest

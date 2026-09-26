@@ -22,14 +22,14 @@ against a hardcoded situation before wiring it into FastAPI.
 import os
 import json
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
 
 from app.models import PlanOutput
 
 load_dotenv()
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-MODEL_NAME = "gemini-3.8-flash"
+MODEL_NAME = "gemini-3.1-flash-lite"
 
 PROMPT_TEMPLATE = """You are CrunchAI, an academic recovery assistant for a
 student who is behind and has limited time.
@@ -92,8 +92,7 @@ def _strip_code_fences(text: str) -> str:
 
 def _call_gemini(prompt: str) -> dict:
     """Send a prompt to Gemini and parse the response as JSON."""
-    model = genai.GenerativeModel(MODEL_NAME)
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
     cleaned = _strip_code_fences(response.text)
     return json.loads(cleaned)
 

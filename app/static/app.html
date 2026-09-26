@@ -1,0 +1,305 @@
+<!--
+  app.html
+
+  Purpose:
+      The actual CrunchAI app — separate from the marketing landing page
+      (index.html) on purpose. Contains every view (Situation, Recovery
+      Plan, Crunch Mode, Check-in, Progress) as <section> blocks; app.js
+      shows/hides them and fills in real data from the backend.
+
+  Interacts with:
+      - style.css   -> all visual styling, warm/cool theme variables
+      - app.js      -> view switching, state, and every fetch() call to
+                       the FastAPI backend (/situation, /plan, /tasks/{id})
+      - index.html  -> the landing page links here via "Start academic
+                       recovery"; this page doesn't link back
+
+  NOTE ON WHAT'S REAL VS. MOCKED (matches the Figma):
+      - "Detected deadlines" panel        -> MOCKED (static demo data).
+        Backend doesn't parse deadlines out of free text yet — it would
+        need a separate Gemini extraction step to be real.
+      - "Current energy" (Low/Okay/Good)  -> UI-only. Not sent to the
+        backend; there's no field for it in SituationInput yet.
+      - "Anything to work around"         -> folded into the description
+        text sent to /situation, since there's no dedicated field for it.
+      - "Why this order" panel            -> MOCKED. The backend doesn't
+        return reasoning, just urgency/summary/tasks.
+      - Progress stats (today %, streak)  -> computed client-side from
+        this session only; nothing is persisted across page reloads.
+      - "Maya Jensen" account footer      -> MOCKED placeholder. No
+        accounts/auth exist in the backend.
+      - Warm/Cool theme toggle            -> fully real, pure CSS
+        (this page doesn't have its own toggle in the header — add one
+        here too if you want it switchable mid-app, not just on landing).
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CrunchAI — App</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body data-theme="warm">
+
+  <section class="view-app-page">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">✦</span> Crunch<span class="brand-accent">AI</span></div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-nav="situation">📋 Situation</button>
+        <button class="nav-item" data-nav="plan" disabled>⇄ Recovery plan</button>
+        <button class="nav-item" data-nav="crunch" disabled>⏱ Crunch Mode</button>
+        <button class="nav-item" data-nav="progress" disabled>📶 Progress</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="avatar">MJ</div>
+        <div><strong>Maya Jensen</strong><div class="muted">Fall term</div></div>
+      </div>
+    </aside>
+
+    <main class="main-panel">
+
+      <!-- ---- Situation ---- -->
+      <section id="panel-situation" class="panel active">
+        <div class="panel-header">
+          <div class="eyebrow">STEP 1 OF 3</div>
+          <h2>Tell us what's going on</h2>
+        </div>
+        <div class="panel-body two-col">
+          <div class="card main-card">
+            <h1 class="card-title">Give us the messy version.</h1>
+            <p class="muted">No need to organize it first. Deadlines, unfinished work, worries—we'll sort it with you.</p>
+
+            <label class="field-label">What's piling up?</label>
+            <textarea id="situation-text" maxlength="1000" placeholder="e.g. Biology exam tomorrow at 10 AM and I've only reviewed chapters 1-3..."></textarea>
+            <div class="char-count"><span id="char-count">0</span> / 1000</div>
+
+            <div class="field-row">
+              <div class="field-col">
+                <label class="field-label">Time available today</label>
+                <select id="time-available">
+                  <option value="30">30 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="90">1 hour 30 minutes</option>
+                  <option value="135" selected>2 hours 15 minutes</option>
+                  <option value="180">3 hours</option>
+                  <option value="240">4 hours</option>
+                </select>
+              </div>
+              <div class="field-col">
+                <label class="field-label">Current energy <span class="optional-tag">(not yet used by AI)</span></label>
+                <div class="segmented" id="energy-segmented">
+                  <button data-energy="low">Low</button>
+                  <button data-energy="okay" class="active">Okay</button>
+                  <button data-energy="good">Good</button>
+                </div>
+              </div>
+            </div>
+
+            <label class="field-label">Anything we should work around? <span class="optional-tag">Optional</span></label>
+            <input type="text" id="constraints-text" placeholder="e.g. Dinner from 6:30-7:15 PM. I focus better in short blocks." />
+
+            <div class="submit-row">
+              <span class="lock-note">🔒 Only used to build this plan</span>
+              <button class="btn-primary" id="btn-analyze">✦ Analyze my situation</button>
+            </div>
+          </div>
+
+          <aside class="side-card">
+            <div class="side-card-head">
+              <h4>Detected deadlines</h4>
+              <span class="mock-badge" title="Mocked: backend doesn't extract deadlines yet">MOCK</span>
+            </div>
+            <div class="deadline-row"><div><strong>Biology 201</strong><div class="muted">Midterm exam</div><div class="muted small">Tomorrow · 10:00 AM</div></div><span class="tag tag-urgent">URGENT</span></div>
+            <div class="deadline-row"><div><strong>World History</strong><div class="muted">Response paper</div><div class="muted small">Thursday · 11:59 PM</div></div><span class="tag tag-warn">DUE SOON</span></div>
+            <div class="deadline-row"><div><strong>Calculus II</strong><div class="muted">Problem sets 6 &amp; 7</div><div class="muted small">Friday · 5:00 PM</div></div><span class="tag tag-neutral">UPCOMING</span></div>
+
+            <div class="callout-card">
+              <div class="callout-title">✦ We'll prioritize, not just schedule.</div>
+              <p class="muted">CrunchAI weighs urgency, impact, and your available energy.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---- Recovery Plan ---- -->
+      <section id="panel-plan" class="panel">
+        <div class="panel-header">
+          <div class="eyebrow">ANALYSIS COMPLETE</div>
+          <h2>Your academic recovery plan</h2>
+        </div>
+        <div class="panel-body two-col">
+          <div class="col-main">
+            <div class="banner-success">
+              <span id="plan-summary-text">We found a realistic path through tonight.</span>
+              <span class="banner-time" id="plan-available-time">-- available</span>
+            </div>
+
+            <div class="hero-task" id="hero-task">
+              <div class="hero-task-top">
+                <span>⚡ YOUR ONE NEXT MOVE</span>
+                <span class="tag tag-urgent" id="hero-task-badge">URGENT</span>
+              </div>
+              <h3 id="hero-task-title">—</h3>
+              <p class="muted" id="hero-task-desc"></p>
+              <div class="hero-task-bottom">
+                <span class="hero-time" id="hero-task-time">-- min</span>
+                <button class="btn-white" id="btn-enter-crunch">Enter Crunch Mode →</button>
+              </div>
+            </div>
+
+            <h4 class="after-that-label">After that</h4>
+            <div id="after-that-list"></div>
+          </div>
+
+          <aside class="side-card">
+            <div class="side-card-head">
+              <h4>Why this order?</h4>
+              <span class="mock-badge" title="Mocked: backend doesn't return reasoning fields yet">MOCK</span>
+            </div>
+            <div class="why-row"><span class="why-icon">🕐</span><div><strong>Urgency</strong><div class="muted">Based on task priority</div></div></div>
+            <div class="why-row"><span class="why-icon">◎</span><div><strong>Impact</strong><div class="muted">Higher-priority tasks first</div></div></div>
+            <div class="why-row"><span class="why-icon">📶</span><div><strong>Energy</strong><div class="muted">Not yet factored in</div></div></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---- Crunch Mode ---- -->
+      <section id="panel-crunch" class="panel">
+        <div class="panel-header">
+          <div class="eyebrow">CRUNCH MODE</div>
+          <h2>One task. Nothing else.</h2>
+        </div>
+        <div class="panel-body two-col">
+          <div class="card main-card center-card">
+            <div class="crunch-top-row">
+              <span class="tag tag-urgent" id="crunch-badge">URGENT</span>
+              <span class="muted">🔕 Distraction-free</span>
+            </div>
+            <div class="eyebrow" id="crunch-task-index">CURRENT TASK · 1 OF 1</div>
+            <h2 id="crunch-task-title">—</h2>
+            <p class="muted" id="crunch-task-desc"></p>
+
+            <div class="timer-ring">
+              <div class="timer-text" id="timer-display">00:00</div>
+              <div class="timer-sub" id="timer-status">Ready to start</div>
+            </div>
+
+            <div class="timer-progress"><div class="timer-progress-fill" id="timer-progress-fill"></div></div>
+            <div class="muted small" id="timer-elapsed-note">0 minutes focused</div>
+
+            <div class="crunch-actions">
+              <button class="btn-outline" id="btn-pause">⏸ Pause</button>
+              <button class="btn-primary" id="btn-complete-task">✓ Complete task</button>
+              <button class="btn-icon" id="btn-reset-timer" title="Reset timer">↺</button>
+            </div>
+          </div>
+
+          <aside class="side-card">
+            <div class="side-card-head"><h4>This block</h4><span id="crunch-block-time" class="muted"></span></div>
+            <div id="crunch-block-list"></div>
+            <div class="callout-card callout-green">
+              <div class="callout-title">🌱 Progress, not perfection.</div>
+              <p class="muted">If you don't finish, that's useful information. We'll adjust the plan.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---- Check-in ---- -->
+      <section id="panel-checkin" class="panel">
+        <div class="panel-header">
+          <div class="eyebrow">SESSION CHECK-IN</div>
+          <h2>Update the plan honestly</h2>
+        </div>
+        <div class="panel-body two-col">
+          <div class="card main-card center-card">
+            <div class="checkin-flag">⚑</div>
+            <h2>How did that focus block go?</h2>
+            <p class="muted">No judgment—your answer helps CrunchAI make the next step more realistic.</p>
+
+            <div class="checkin-options" id="checkin-options">
+              <button class="checkin-option" data-status="completed">
+                <span class="checkin-icon">✓</span><strong>Completed</strong><div class="muted small">I finished the full task</div>
+              </button>
+              <button class="checkin-option active" data-status="partial">
+                <span class="checkin-icon">◐</span><strong>Partially completed</strong><div class="muted small">I made meaningful progress</div>
+              </button>
+              <button class="checkin-option" data-status="skipped">
+                <span class="checkin-icon">✕</span><strong>Not completed</strong><div class="muted small">I couldn't make progress</div>
+              </button>
+            </div>
+
+            <label class="field-label">What did you cover? <span class="optional-tag">Optional, not sent to AI yet</span></label>
+            <textarea id="checkin-notes" placeholder="e.g. Finished glycolysis and the Krebs cycle..."></textarea>
+
+            <div class="submit-row">
+              <button class="link-btn-plain" id="btn-skip-details">Skip details</button>
+              <button class="btn-primary" id="btn-update-plan">✦ Update my plan</button>
+            </div>
+          </div>
+
+          <aside class="side-card side-card-dark">
+            <div class="side-card-head">
+              <h4>✦ Automatic replanning</h4>
+              <span class="pill pill-live">LIVE</span>
+            </div>
+            <div class="replan-row">✓ <div><strong>Preserve progress</strong><div class="muted small">Completed work stays checked off</div></div></div>
+            <div class="replan-row">↓ <div><strong>Move unfinished work</strong><div class="muted small">Remaining task becomes next</div></div></div>
+            <div class="replan-row">🛡 <div><strong>Protect the buffer</strong><div class="muted small">Remaining time reallocated</div></div></div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---- Progress ---- -->
+      <section id="panel-progress" class="panel">
+        <div class="panel-header">
+          <div class="eyebrow">PLAN REVISED</div>
+          <h2>You're still on track</h2>
+        </div>
+        <div class="panel-body two-col">
+          <div class="col-main">
+            <div class="banner-success" id="progress-banner">Plan updated from your session.</div>
+
+            <div class="hero-task hero-task-cool" id="revised-hero" style="display:none;">
+              <div class="hero-task-top"><span>➹ REVISED NEXT TASK</span><span class="tag tag-urgent" id="revised-badge">URGENT</span></div>
+              <h3 id="revised-title">—</h3>
+              <p class="muted" id="revised-desc"></p>
+              <div class="hero-task-bottom">
+                <span class="hero-time" id="revised-time">-- min</span>
+                <button class="btn-white" id="btn-start-next-block">Start next block →</button>
+              </div>
+            </div>
+
+            <div class="empty-state" id="progress-empty" style="display:none;">
+              <h3>🎉 Plan complete</h3>
+              <p class="muted">Every task in this plan has been addressed. Nice work.</p>
+            </div>
+
+            <h4 class="after-that-label">Updated queue</h4>
+            <div id="progress-queue-list"></div>
+          </div>
+
+          <aside class="side-card">
+            <div class="side-card-head"><h4>Today</h4><span id="progress-percent">0%</span></div>
+            <div class="progress-bar"><div class="progress-bar-fill" id="progress-bar-fill"></div></div>
+            <div class="stat-row">
+              <div><strong id="stat-minutes">0m</strong><div class="muted small">focused</div></div>
+              <div><strong id="stat-topics">0</strong><div class="muted small">topics covered</div></div>
+              <div><strong id="stat-replans">0</strong><div class="muted small">replan</div></div>
+            </div>
+            <div class="side-card-head" style="margin-top:24px;">
+              <h4>Recent activity</h4>
+              <span class="mock-badge" title="This session only — nothing persists across reloads">SESSION ONLY</span>
+            </div>
+            <div id="activity-list"></div>
+          </aside>
+        </div>
+      </section>
+
+    </main>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

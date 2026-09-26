@@ -1,0 +1,102 @@
+<!--
+  index.html
+
+  Purpose:
+      CrunchAI's marketing/landing page. Separate from the actual app
+      (app.html) on purpose — this page is what a visitor sees first, the
+      app is what they use once they've decided to start.
+
+  Interacts with:
+      - style.css     -> shared visual styling, warm/cool theme variables
+      - app.html       -> "Start academic recovery" links here
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CrunchAI</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body data-theme="warm">
+
+  <section class="view-landing">
+    <header class="landing-header">
+      <div class="brand"><span class="brand-mark">✦</span> Crunch<span class="brand-accent">AI</span></div>
+      <div class="landing-header-right">
+        <span class="how-it-works">How it works</span>
+        <div class="theme-toggle">
+          <button class="theme-btn active" data-theme-btn="warm">● Warm</button>
+          <button class="theme-btn" data-theme-btn="cool">● Cool</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="landing-body">
+      <div class="landing-left">
+        <div class="pill pill-soft">♡ You don't have to solve everything at once</div>
+        <h1>Let's make school feel<br />manageable again.</h1>
+        <p class="subhead">CrunchAI turns the pile-up into one calm, realistic next step—then adapts as you go.</p>
+
+        <div class="landing-cards">
+          <div class="landing-card">
+            <div class="landing-card-top">
+              <div class="icon-badge">📅</div>
+              <span class="tag tag-neutral">PLAN AHEAD</span>
+            </div>
+            <h3>Prepare proactively</h3>
+            <p>Build a steady plan before your deadlines start feeling urgent.</p>
+            <button class="link-btn" disabled title="Not implemented yet">Create a preparation plan →</button>
+          </div>
+          <div class="landing-card landing-card-highlight">
+            <div class="landing-card-top">
+              <div class="icon-badge icon-badge-accent">🔔</div>
+              <span class="tag tag-urgent">URGENT</span>
+            </div>
+            <h3>I need help ASAP</h3>
+            <p>Tell us what's due. We'll triage it and find the smartest next move.</p>
+            <a class="link-btn link-btn-accent" href="app.html">Start academic recovery →</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="landing-right">
+        <div class="snapshot-card">
+          <div class="snapshot-head">
+            <div>
+              <div class="eyebrow">A CALMER VIEW</div>
+              <h4>Your recovery snapshot</h4>
+            </div>
+            <span class="pill pill-ai">● AI READY</span>
+          </div>
+          <div class="snapshot-hero">
+            <div class="snapshot-hero-top">
+              <span>⚡ DO THIS FIRST</span>
+            </div>
+            <h3>Review biology cell respiration notes</h3>
+            <div class="snapshot-hero-meta">25 min &nbsp;·&nbsp; Exam tomorrow · High impact</div>
+          </div>
+          <div class="snapshot-list">
+            <div class="snapshot-row"><span class="dot"></span><div><strong>Biology practice questions</strong><div class="muted">Due tomorrow</div></div><span class="time">35 min</span></div>
+            <div class="snapshot-row"><span class="dot"></span><div><strong>Finish history response draft</strong><div class="muted">Due Thu</div></div><span class="time">40 min</span></div>
+            <div class="snapshot-row"><span class="dot"></span><div><strong>Email calculus TA</strong><div class="muted">Unlocks help</div></div><span class="time">5 min</span></div>
+          </div>
+          <div class="snapshot-footnote">🛡 Plans stay realistic and replan automatically.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // Landing page only needs the theme toggle — no app state, no fetch calls.
+    document.querySelectorAll("[data-theme-btn]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.body.dataset.theme = btn.dataset.themeBtn;
+        document.querySelectorAll("[data-theme-btn]").forEach((b) =>
+          b.classList.toggle("active", b === btn)
+        );
+      });
+    });
+  </script>
+</body>
+</html>

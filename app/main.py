@@ -6,9 +6,8 @@ Purpose:
     validated by models.py, call planner.py to think, and call db.py to
     persist/read state. Contains no Gemini logic and no raw SQL of its own.
 
-    No frontend is mounted here on purpose — hit these routes directly via
-    /docs, curl, or httpie while you're tweaking the backend. Add the
-    static mount back once there's an actual frontend to serve.
+    The frontend (app/static/) is mounted at the bottom of this file, after
+    every API route, so it never shadows /situation, /plan, or /tasks/{id}.
 
 Interacts with:
     - models.py    -> request bodies and response_models on every route
@@ -16,14 +15,16 @@ Interacts with:
     - db.py        -> create_plan / create_task / get_latest_plan /
                       get_pending_tasks_for_plan / update_task_status /
                       mark_tasks_replaced / update_plan_meta / create_session
+    - app/static/  -> index.html / style.css / app.js, served as-is
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 
 from app import db, planner
 from app.models import SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut
 
-app = FastAPI(title="CrunchAI (backend-only)")
+app = FastAPI(title="CrunchAI")
 
 
 @app.on_event("startup")
@@ -111,3 +112,8 @@ def _load_plan_out(plan_id: int) -> PlanOut:
         summary=plan_row["summary"],
         tasks=[TaskOut(**t) for t in visible_tasks],
     )
+
+
+# Serve the frontend last, so it doesn't shadow the API routes above.
+# html=True makes "/" resolve to index.html.
+app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

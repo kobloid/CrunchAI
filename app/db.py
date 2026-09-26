@@ -1,138 +1,182 @@
 """
-planner.py
+db.py
 
 Purpose:
-    The "brain" of CrunchAI. Owns the Gemini API call, the prompt text, and
-    turning a student's raw situation (or a progress update) into a
-    validated plan. Intentionally knows nothing about FastAPI or SQLite —
-    it takes plain data in and returns validated Pydantic models out, so it
-    can be tested and reused on its own.
+    Owns all SQLite access for CrunchAI: the schema definition and every
+    insert/select/update against the tasks, sessions, and plans tables.
+    Nothing outside this file should write raw SQL.
 
 Interacts with:
-    - models.py    -> validates Gemini's raw JSON against PlanOutput
-    - main.py      -> routes call generate_plan() / replan(), then hand the
-                      result to db.py to persist
-    - db.py        -> NOT imported here on purpose; main.py is the glue
-                      between planner output and storage
-
-Run directly (python -m app.planner) to sanity-check a single Gemini call
-against a hardcoded situation before wiring it into FastAPI.
+    - main.py      -> routes call these functions instead of touching
+                      sqlite3 directly
+    - models.py    -> rows returned here get shaped into PlanOut / TaskOut
+                      before going back to the client
+    - planner.py   -> does NOT import this directly; main.py is the glue
+                      between planner output and db writes
 """
 
-import os
-import json
-from dotenv import load_dotenv
-import google.generativeai as genai
+import sqlite3
+from contextlib import contextmanager
 
-from app.models import PlanOutput
+DB_PATH = "crunchai.db"
 
-load_dotenv()
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    available_minutes INTEGER,
+    urgency TEXT,
+    summary TEXT
+);
 
-MODEL_NAME = "gemini-2.5-flash"
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    duration_minutes INTEGER,
+    priority INTEGER,
+    status TEXT DEFAULT 'pending',
+    FOREIGN KEY (plan_id) REFERENCES plans (id)
+);
 
-PROMPT_TEMPLATE = """You are CrunchAI, an academic recovery assistant for a
-student who is behind and has limited time.
-
-Student's situation: {situation}
-Time available: {minutes} minutes
-
-Return ONLY valid JSON (no markdown, no commentary) matching this shape:
-{{
-  "urgency": "low" | "moderate" | "high" | "critical",
-  "summary": "one or two sentence strategic summary",
-  "tasks": [
-    {{"title": "...", "duration_minutes": int, "priority": int}}
-  ]
-}}
-
-The tasks must add up to no more than {minutes} minutes total.
-"""
-
-
-REPLAN_PROMPT_TEMPLATE = """You are CrunchAI, an academic recovery assistant.
-The student was already working from a plan. Here is what just happened and
-what's still left.
-
-Last task attempted: {last_task_title}
-Outcome: {last_status} (actual time spent: {actual_minutes} minutes)
-
-Remaining tasks the student has not done yet:
-{remaining_tasks_list}
-
-Time remaining now: {minutes_left} minutes
-
-Given this, produce a REVISED plan for the remaining time. You may reorder,
-merge, shorten, drop, or replace the remaining tasks — whatever is most
-realistic given how the last task actually went. Do not just repeat the
-remaining tasks unchanged unless that's genuinely still the best plan.
-
-Return ONLY valid JSON (no markdown, no commentary) matching this shape:
-{{
-  "urgency": "low" | "moderate" | "high" | "critical",
-  "summary": "one or two sentence strategic summary of the revised plan",
-  "tasks": [
-    {{"title": "...", "duration_minutes": int, "priority": int}}
-  ]
-}}
-
-The tasks must add up to no more than {minutes_left} minutes total.
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT,
+    actual_minutes INTEGER,
+    outcome TEXT,
+    FOREIGN KEY (task_id) REFERENCES tasks (id)
+);
 """
 
 
-def _strip_code_fences(text: str) -> str:
-    """Gemini sometimes wraps JSON in ```json ... ``` even when told not to."""
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text
-        if text.endswith("```"):
-            text = text.rsplit("```", 1)[0]
-    return text.strip()
+@contextmanager
+def get_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def _call_gemini(prompt: str) -> dict:
-    """Send a prompt to Gemini and parse the response as JSON."""
-    model = genai.GenerativeModel(MODEL_NAME)
-    response = model.generate_content(prompt)
-    cleaned = _strip_code_fences(response.text)
-    return json.loads(cleaned)
+def init_db():
+    with get_connection() as conn:
+        conn.executescript(SCHEMA_SQL)
 
 
-def generate_plan(situation: str, available_minutes: int) -> PlanOutput:
-    """Turn a fresh situation description into a validated plan."""
-    prompt = PROMPT_TEMPLATE.format(situation=situation, minutes=available_minutes)
-    raw = _call_gemini(prompt)
-    return PlanOutput.model_validate(raw)
+# ---- Plans ----
+
+def create_plan(available_minutes: int, urgency: str, summary: str) -> int:
+    """Insert a new plan row, return its id."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO plans (available_minutes, urgency, summary) VALUES (?, ?, ?)",
+            (available_minutes, urgency, summary),
+        )
+        return cur.lastrowid
 
 
-def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) -> PlanOutput:
-    """
-    Take the tasks that weren't finished plus how the last task actually
-    went, and produce a revised plan for the remaining time.
-
-    remaining_tasks: list of dicts with at least 'title' and 'duration_minutes'
-    last_update: dict with 'title', 'status', 'actual_minutes' for the task
-                 that was just marked done/partial/skipped
-    """
-    remaining_list_str = "\n".join(
-        f"- {t['title']} (~{t['duration_minutes']} min)" for t in remaining_tasks
-    ) or "(none — this was the last task)"
-
-    prompt = REPLAN_PROMPT_TEMPLATE.format(
-        last_task_title=last_update.get("title", "unknown task"),
-        last_status=last_update.get("status", "unknown"),
-        actual_minutes=last_update.get("actual_minutes", "unknown"),
-        remaining_tasks_list=remaining_list_str,
-        minutes_left=minutes_left,
-    )
-    raw = _call_gemini(prompt)
-    return PlanOutput.model_validate(raw)
+def get_latest_plan():
+    """Return the most recently created plan row, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM plans ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        return dict(row) if row else None
 
 
-if __name__ == "__main__":
-    # Quick manual smoke test — no FastAPI, no DB, just the model call.
-    plan = generate_plan(
-        situation="I have a biology exam tomorrow at 9am and haven't studied chapters 4-7.",
-        available_minutes=180,
-    )
-    print(plan.model_dump_json(indent=2))
+def get_plan(plan_id: int):
+    """Return a specific plan row by id, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM plans WHERE id = ?", (plan_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+# ---- Tasks ----
+
+def create_task(plan_id: int, title: str, duration_minutes: int, priority: int) -> int:
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO tasks (plan_id, title, duration_minutes, priority)
+               VALUES (?, ?, ?, ?)""",
+            (plan_id, title, duration_minutes, priority),
+        )
+        return cur.lastrowid
+
+
+def get_tasks_for_plan(plan_id: int):
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tasks WHERE plan_id = ? ORDER BY priority ASC",
+            (plan_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_task(task_id: int):
+    """Return a single task row (dict) or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ?", (task_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_pending_tasks_for_plan(plan_id: int, exclude_task_id: int | None = None):
+    """All still-pending tasks for a plan, optionally excluding one (the one just updated)."""
+    with get_connection() as conn:
+        if exclude_task_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE plan_id = ? AND status = 'pending' AND id != ? ORDER BY priority ASC",
+                (plan_id, exclude_task_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE plan_id = ? AND status = 'pending' ORDER BY priority ASC",
+                (plan_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_task_status(task_id: int, status: str):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE tasks SET status = ? WHERE id = ?",
+            (status, task_id),
+        )
+
+
+def mark_tasks_replaced(task_ids: list[int]):
+    """Mark a batch of tasks as superseded by a replan, rather than deleting them."""
+    if not task_ids:
+        return
+    with get_connection() as conn:
+        placeholders = ",".join("?" for _ in task_ids)
+        conn.execute(
+            f"UPDATE tasks SET status = 'replaced' WHERE id IN ({placeholders})",
+            task_ids,
+        )
+
+
+def update_plan_meta(plan_id: int, urgency: str, summary: str):
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE plans SET urgency = ?, summary = ? WHERE id = ?",
+            (urgency, summary, plan_id),
+        )
+
+
+# ---- Sessions ----
+
+def create_session(task_id: int, actual_minutes: int, outcome: str):
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO sessions (task_id, completed_at, actual_minutes, outcome)
+               VALUES (?, CURRENT_TIMESTAMP, ?, ?)""",
+            (task_id, actual_minutes, outcome),
+        )
