@@ -326,8 +326,34 @@ document.getElementById("btn-complete-task").addEventListener("click", () => {
 function appendChatMessage(role, content) {
     const chatWindow = document.getElementById("chat-window");
     const div = document.createElement("div");
+
     div.className = `chat-message ${role === "user" ? "chat-user" : "chat-assistant"}`;
-    div.innerHTML = `<strong>${role === "user" ? "You" : "CrunchAI"}</strong><p>${escapeHtml(content)}</p>`;
+
+    const label = document.createElement("strong");
+    label.textContent = role === "user" ? "You" : "CrunchAI";
+
+    const messageBody = document.createElement("div");
+    messageBody.className = "chat-message-body";
+
+    if (role === "assistant") {
+        const html = marked.parse(content);
+        messageBody.innerHTML = DOMPurify.sanitize(html);
+
+        renderMathInElement(messageBody, {
+            delimiters: [
+                { left: "$$", right: "$$", display: true },
+                { left: "$", right: "$", display: false },
+                { left: "\\(", right: "\\)", display: false },
+                { left: "\\[", right: "\\]", display: true }
+            ]
+        });
+    } else {
+        messageBody.textContent = content;
+    }
+
+    div.appendChild(label);
+    div.appendChild(messageBody);
+
     chatWindow.appendChild(div);
     chatWindow.scrollTop = chatWindow.scrollHeight;
 }
