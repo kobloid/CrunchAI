@@ -104,8 +104,26 @@
   const sceneEls = Object.fromEntries(SCENES.map((name) => [name, $(`[data-scene="${name}"]`)]));
 
   // ---------------- Helpers ----------------
+  // A reused keep-alive connection can be closed by the server at the moment we
+  // send, which rejects instantly with no response. Retry that case once; a
+  // slow failure may have reached the server, so it is not retried.
+  async function send(path, init) {
+    const sentAt = performance.now();
+    try {
+      return await fetch(path, init);
+    } catch (err) {
+      if (performance.now() - sentAt > 2000) throw new Error("no connection");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        return await fetch(path, init);
+      } catch {
+        throw new Error("no connection");
+      }
+    }
+  }
+
   async function api(path, { method = "GET", body } = {}) {
-    const res = await fetch(path, {
+    const res = await send(path, {
       method,
       headers: body ? { "Content-Type": "application/json" } : undefined,
       body: body ? JSON.stringify(body) : undefined,

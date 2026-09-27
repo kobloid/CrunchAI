@@ -30,6 +30,7 @@ import os
 import json
 import time
 from datetime import datetime, timezone
+import httpx
 from dotenv import load_dotenv
 from google import genai
 from google.genai import errors as genai_errors
@@ -207,7 +208,8 @@ def _strip_code_fences(text: str) -> str:
 def _generate(prompt: str) -> str:
     """
     Get text from Gemini. The primary model returns 503 "high demand" at
-    busy times, so retry briefly, then fall back to a lighter model.
+    busy times, and Google sometimes drops a reused connection, so retry
+    briefly, then fall back to a lighter model.
     """
     last_error = None
     for model in (MODEL_NAME, FALLBACK_MODEL):
@@ -219,6 +221,9 @@ def _generate(prompt: str) -> str:
                     raise
                 last_error = err
                 time.sleep(1 + attempt)
+            except httpx.TransportError as err:
+                last_error = err
+                time.sleep(0.5)
     raise last_error
 
 

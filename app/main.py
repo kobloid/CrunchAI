@@ -31,6 +31,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -60,7 +61,8 @@ def on_startup():
 # ---- Error handling ----
 
 @app.exception_handler(genai_errors.APIError)
-def ai_unavailable(request: Request, exc: genai_errors.APIError):
+@app.exception_handler(httpx.TransportError)
+def ai_unavailable(request: Request, exc: Exception):
     return JSONResponse(status_code=503, content={"detail": "The AI is busy right now. Try again in a few seconds."})
 
 
