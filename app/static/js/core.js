@@ -138,7 +138,7 @@
     window.addEventListener("pointerup", () => ring.classList.remove("is-down"));
 
     const INTERACTIVE = "a, button, select, label, [role='radio'], [data-cursor]";
-    const TEXT = "input[type='text'], textarea";
+    const TEXT = "input[type='text'], input[type='password'], textarea";
 
     document.addEventListener("pointerover", (e) => {
       const textField = e.target.closest(TEXT);

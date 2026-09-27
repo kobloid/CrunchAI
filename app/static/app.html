@@ -40,14 +40,17 @@
         <li><button class="step" type="button" data-step="plan" disabled><span class="step-num">2</span><span class="step-label">Plan</span></button></li>
         <li><button class="step" type="button" data-step="crunch" disabled><span class="step-num">3</span><span class="step-label">Crunch</span></button></li>
         <li><button class="step" type="button" data-step="checkin" disabled><span class="step-num">4</span><span class="step-label">Check-in</span></button></li>
-        <li><button class="step" type="button" data-step="progress" disabled><span class="step-num">5</span><span class="step-label">Progress</span></button></li>
+        <li><button class="step" type="button" data-step="progress" disabled><span class="step-num">5</span><span class="step-label">Recap</span></button></li>
       </ol>
     </nav>
 
+    <div class="nav-right">
     <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
       <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
     </button>
+    <div data-account data-next="app.html?resume=1"></div>
+    </div>
   </header>
 
   <main id="stage" class="stage" tabindex="-1">
@@ -73,7 +76,10 @@
             <span class="thinking-bar" aria-hidden="true"></span>
 
             <div class="field">
-              <label class="field-label" for="situation-text">Everything you've been putting off</label>
+              <div class="field-head">
+                <label class="field-label" for="situation-text">Everything you've been putting off</label>
+                <button type="button" class="text-btn" id="btn-example">Try an example</button>
+              </div>
               <textarea id="situation-text" rows="6" maxlength="1000" aria-describedby="situation-error situation-count" placeholder="e.g. Bio midterm tomorrow at 10 AM, I've only read chapters 1 to 3. History paper due Thursday. Calc sets 6 and 7 due Friday."></textarea>
               <div class="field-foot">
                 <span class="field-error" id="situation-error" hidden></span>
@@ -161,6 +167,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
                 <span id="plan-next-time"></span>
               </span>
+              <span class="due" id="plan-next-due" hidden></span>
               <button type="button" class="btn btn-primary" id="btn-enter-crunch" data-magnetic>
                 <span class="btn-label">Start this task</span>
                 <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -185,6 +192,14 @@
             <div class="time-bar" id="glance-bar" aria-hidden="true"></div>
             <p class="muted small">Each segment is one task's share of your time, in order.</p>
           </div>
+          <div class="aside-card surface save-card" id="save-card" hidden>
+            <p class="aside-title">Save this plan</p>
+            <p class="muted small">Make a free account to keep your plan, chat, and streak. Your progress comes with you.</p>
+            <div class="save-actions">
+              <a class="btn btn-primary btn-sm" href="account.html?mode=signup&amp;next=app.html%3Fresume%3D1">Sign up free</a>
+              <a class="btn btn-ghost btn-sm" href="account.html?mode=login&amp;next=app.html%3Fresume%3D1">Log in</a>
+            </div>
+          </div>
         </aside>
       </div>
     </section>
@@ -196,6 +211,7 @@
           <div class="scene-meta" data-stagger>
             <p class="eyebrow" id="crunch-index">Step 3 of 5 &middot; Crunch</p>
             <span class="pill" id="crunch-urgency"><span class="dot"></span><span class="pill-text"></span></span>
+            <span class="due" id="crunch-due" hidden></span>
           </div>
           <h1 class="display scene-title crunch-title" id="crunch-title" tabindex="-1" data-stagger></h1>
 
@@ -220,7 +236,8 @@
 
             <div class="commit" id="commit-edit">
               <label class="field-label" for="commitment">By the end of this block I will...</label>
-              <input type="text" id="commitment" maxlength="140" placeholder="e.g. explain glycolysis without my notes" />
+              <input type="text" id="commitment" maxlength="140" placeholder="e.g. explain glycolysis without my notes" aria-describedby="commit-help" />
+              <p class="field-help" id="commit-help">Write your goal to unlock the timer.</p>
             </div>
             <p class="goal" id="goal-display" hidden><span>Goal</span><strong id="goal-text"></strong></p>
 
@@ -236,7 +253,7 @@
             </div>
 
             <div class="timer-controls">
-              <button type="button" class="btn btn-primary btn-sm" id="btn-timer-toggle">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-timer-toggle" disabled aria-describedby="commit-help">
                 <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg>
                 <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true" hidden><path fill="currentColor" d="M7.5 5h3v14h-3zM13.5 5h3v14h-3z"/></svg>
                 <span class="btn-label">Start</span>
@@ -259,6 +276,14 @@
                   <span class="switch-help">Only count time on this tab. Leave it off if you need another tab for notes.</span>
                 </span>
                 <input type="checkbox" id="pref-focus-lock" />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+              <label class="switch">
+                <span>
+                  <strong>Alert me when time's up</strong>
+                  <span class="switch-help">A soft chime, plus a notification if you're in another tab.</span>
+                </span>
+                <input type="checkbox" id="pref-alerts" />
                 <span class="switch-track" aria-hidden="true"></span>
               </label>
               <label class="switch">
@@ -368,7 +393,7 @@
     <section class="scene" data-scene="progress" aria-labelledby="progress-title" hidden>
       <div class="scene-inner two-col">
         <div class="scene-main">
-          <p class="eyebrow" data-stagger>Step 5 of 5 &middot; Progress</p>
+          <p class="eyebrow" data-stagger>Step 5 of 5 &middot; Recap</p>
           <h1 class="display scene-title" id="progress-title" tabindex="-1" data-stagger></h1>
           <p class="plan-summary" id="progress-banner" data-stagger></p>
 
@@ -383,6 +408,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
                 <span id="progress-next-time"></span>
               </span>
+              <span class="due" id="progress-next-due" hidden></span>
               <button type="button" class="btn btn-primary" id="btn-next-block" data-magnetic>
                 <span class="btn-label">Start next block</span>
                 <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -431,6 +457,7 @@
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <script src="js/core.js"></script>
+  <script src="js/auth.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

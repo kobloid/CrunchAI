@@ -94,7 +94,7 @@
       .to(".hero-mark", { autoAlpha: 1, y: 0, duration: 1.4 }, 0.1)
       .to(".hero-label", { autoAlpha: 1, y: 0, duration: 1.4 }, 0.25)
       .to(lines, { yPercent: 0, duration: 1.6, stagger: 0.12 }, 0.35)
-      .to(".hero-sub, .hero-ctas, .hero .hero-micro", { autoAlpha: 1, y: 0, duration: 1.4, stagger: 0.1 }, 0.75)
+      .to(".hero-sub, .hero-ctas, .hero .hero-micro, .hero-example", { autoAlpha: 1, y: 0, duration: 1.4, stagger: 0.1 }, 0.75)
       .to("#nav", { autoAlpha: 1, duration: 1.2, ease: "power2.out", clearProps: "opacity,visibility" }, 0.9)
       .to(".showcase", { autoAlpha: 1, duration: 1.4, ease: "power2.out" }, 1)
       .to(".preview", { y: 0, duration: 1.8 }, 1);

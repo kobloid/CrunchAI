@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrunchAI · Log in</title>
+  <meta name="description" content="Log in or create a free CrunchAI account to keep your plans, streak, and study history." />
+  <link rel="icon" type="image/png" href="assets/mark-128.png" />
+
+  <script>
+    (function () {
+      var d = document.documentElement, t;
+      try { t = localStorage.getItem("crunch-theme"); } catch (e) {}
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      d.dataset.theme = t;
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body class="page-body">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="nav page-nav">
+    <a class="brand" href="index.html" aria-label="CrunchAI home">
+      <img src="assets/mark-128.png" alt="" width="32" height="32" />
+      <span>Crunch<span class="ai">AI</span></span>
+    </a>
+    <div class="nav-right">
+      <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" class="account-main">
+    <section class="account-card surface raised" id="auth-card" aria-labelledby="auth-title">
+      <div class="segmented account-switch" role="tablist" aria-label="Log in or sign up">
+        <button type="button" role="tab" id="tab-login" aria-selected="true" aria-controls="auth-form" data-mode="login">Log in</button>
+        <button type="button" role="tab" id="tab-signup" aria-selected="false" aria-controls="auth-form" data-mode="signup">Sign up</button>
+      </div>
+
+      <h1 class="display account-title" id="auth-title">Welcome back.</h1>
+      <p class="muted account-sub" id="auth-sub">Your plan is right where you left it.</p>
+
+      <form id="auth-form" class="account-form" role="tabpanel" aria-labelledby="auth-title" novalidate>
+        <div class="field">
+          <label class="field-label" for="auth-username">Username</label>
+          <input type="text" id="auth-username" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="24" required aria-describedby="username-help" />
+          <p class="field-help" id="username-help" hidden>3 to 24 letters, numbers, dots, or underscores.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="auth-password">Password</label>
+          <div class="password-wrap">
+            <input type="password" id="auth-password" name="password" autocomplete="current-password" maxlength="128" required aria-describedby="password-help" />
+            <button type="button" class="password-toggle" id="password-toggle" aria-pressed="false" aria-controls="auth-password">Show</button>
+          </div>
+          <p class="field-help" id="password-help" hidden>At least 8 characters.</p>
+        </div>
+
+        <p class="claim-note" id="claim-note" hidden>Your current plan and topics will be saved to this account.</p>
+        <p class="form-error" id="auth-error" role="alert" hidden></p>
+
+        <button type="submit" class="btn btn-primary btn-lg account-submit" id="auth-submit">
+          <span class="btn-label">Log in</span>
+        </button>
+      </form>
+
+      <p class="account-foot muted small">Just looking? <a class="text-link" href="app.html">Continue as a guest</a></p>
+    </section>
+
+    <section class="account-card surface raised" id="signed-in" aria-labelledby="signed-in-title" hidden>
+      <h1 class="display account-title" id="signed-in-title">You're in.</h1>
+      <p class="muted account-sub">Logged in as <strong id="signed-in-name"></strong>.</p>
+      <div class="account-actions">
+        <a class="btn btn-primary btn-lg" href="app.html?resume=1">Go to the study room</a>
+        <a class="btn btn-ghost btn-lg" href="progress.html">My progress</a>
+      </div>
+      <button type="button" class="text-btn" id="btn-signout">Log out</button>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/account.js"></script>
+</body>
+</html>

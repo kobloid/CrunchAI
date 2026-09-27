@@ -186,78 +186,77 @@
   100% { transform: scaleX(0); transform-origin: 100% 50%; }
 }
 
-.field {
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field-help {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* Deadline chip: dot + text, colored by how close the deadline is */
+.due {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.due::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.due[data-level="soon"],
+.q-due[data-level="soon"] {
+  color: var(--amber);
+}
+
+.due[data-level="urgent"],
+.due[data-level="overdue"],
+.q-due[data-level="urgent"],
+.q-due[data-level="overdue"] {
+  color: var(--red);
+}
+
+.q-due {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.next-move-foot .btn {
+  margin-left: auto;
+}
+
+.save-card {
   display: grid;
   gap: 8px;
-  margin: 0 0 22px;
-  padding: 0;
-  border: 0;
-  min-width: 0;
-}
-
-.field-label {
-  padding: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.optional {
-  margin-left: 6px;
-  font-size: 13px;
-  font-weight: 400;
-  color: var(--text-muted);
-}
-
-.field-row {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-
-textarea,
-input[type="text"],
-select {
-  width: 100%;
-  padding: 13px 15px;
-  font-size: 16px;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  transition: border-color 0.3s, box-shadow 0.3s;
-}
-
-html[data-theme="light"] textarea,
-html[data-theme="light"] input[type="text"],
-html[data-theme="light"] select {
-  background: var(--surface);
-}
-
-textarea {
-  resize: vertical;
-  min-height: 140px;
-}
-
-textarea::placeholder,
-input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.8;
-}
-
-textarea:hover,
-input[type="text"]:hover,
-select:hover {
-  border-color: var(--text-muted);
-}
-
-textarea:focus-visible,
-input[type="text"]:focus-visible,
-select:focus-visible {
-  outline: none;
   border-color: var(--blue);
-  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+
+.save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .select-wrap {
@@ -297,16 +296,6 @@ select option {
 .field-count {
   margin-left: auto;
   color: var(--text-muted);
-}
-
-.field-error,
-.form-error {
-  color: var(--red);
-  font-size: 14px;
-}
-
-.form-error {
-  margin: -4px 0 16px;
 }
 
 .segmented {

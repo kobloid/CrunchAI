@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CrunchAI · My progress</title>
+  <meta name="description" content="Your CrunchAI streak, focus time, recall scores, and plans." />
+  <link rel="icon" type="image/png" href="assets/mark-128.png" />
+
+  <script>
+    (function () {
+      var d = document.documentElement, t;
+      try { t = localStorage.getItem("crunch-theme"); } catch (e) {}
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      d.dataset.theme = t;
+    })();
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/pages.css" />
+</head>
+<body class="page-body">
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="nav page-nav">
+    <a class="brand" href="index.html" aria-label="CrunchAI home">
+      <img src="assets/mark-128.png" alt="" width="32" height="32" />
+      <span>Crunch<span class="ai">AI</span></span>
+    </a>
+    <div class="nav-right">
+      <a class="nav-link" href="app.html?resume=1">Study room</a>
+      <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <div data-account data-next="progress.html"></div>
+    </div>
+  </header>
+
+  <main id="main" class="progress-main">
+    <p class="muted" id="progress-status" role="status">Loading your progress…</p>
+
+    <!-- Guest -->
+    <section class="progress-gate surface" id="guest-gate" aria-labelledby="gate-title" hidden>
+      <h1 class="display gate-title" id="gate-title">Your streak lives here.</h1>
+      <p class="lead">Log in or create a free account to track your streak, focus time, and recall scores across every plan.</p>
+      <div class="gate-actions">
+        <a class="btn btn-primary btn-lg" href="account.html?mode=signup&amp;next=progress.html">Create free account</a>
+        <a class="btn btn-ghost btn-lg" href="account.html?mode=login&amp;next=progress.html">Log in</a>
+      </div>
+    </section>
+
+    <!-- Logged in -->
+    <div id="progress-view" hidden>
+      <header class="progress-head">
+        <p class="eyebrow" id="hello"></p>
+        <h1 class="display progress-title">Your comeback <em>record.</em></h1>
+        <p class="lead">Every block you start counts. Here's what you've done so far.</p>
+      </header>
+
+      <section class="tiles" aria-label="Totals">
+        <div class="tile surface">
+          <p class="tile-label">Comeback streak</p>
+          <p class="tile-value" id="tile-streak">0</p>
+          <p class="tile-note" id="tile-streak-note">Days in a row with a finished block</p>
+        </div>
+        <div class="tile surface">
+          <p class="tile-label">Focus time</p>
+          <p class="tile-value" id="tile-focus">0m</p>
+          <p class="tile-note">Across every block you logged</p>
+        </div>
+        <div class="tile surface">
+          <p class="tile-label">Blocks finished</p>
+          <p class="tile-value" id="tile-blocks">0</p>
+          <p class="tile-note" id="tile-blocks-note">Done or partly done</p>
+        </div>
+        <div class="tile surface">
+          <p class="tile-label">Recall accuracy</p>
+          <p class="tile-value" id="tile-recall">None yet</p>
+          <p class="tile-note" id="tile-recall-note">From Prove it quizzes</p>
+        </div>
+      </section>
+
+      <section class="chart-card surface" aria-labelledby="chart-title">
+        <div class="chart-head">
+          <h2 class="section-h" id="chart-title">Focus time, last 7 days</h2>
+          <p class="muted small" id="chart-total"></p>
+        </div>
+        <div class="week-chart" id="week-chart" role="group" aria-describedby="chart-title"></div>
+        <div class="chart-tip" id="chart-tip" role="tooltip" hidden></div>
+        <table class="sr-only" id="week-table">
+          <caption>Focus minutes per day, last 7 days</caption>
+          <thead><tr><th scope="col">Day</th><th scope="col">Minutes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <div class="progress-cols">
+        <section aria-labelledby="plans-title">
+          <h2 class="section-h" id="plans-title">Your plans</h2>
+          <ol class="plan-list" id="plan-list"></ol>
+        </section>
+        <section aria-labelledby="blocks-title">
+          <h2 class="section-h" id="blocks-title">Recent blocks</h2>
+          <ol class="block-list" id="block-list"></ol>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/progress.js"></script>
+</body>
+</html>

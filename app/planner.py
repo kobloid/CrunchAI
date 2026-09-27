@@ -118,14 +118,32 @@ Do not use em dashes in any text.
 """
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+def _resolve_now(client_now: str | None = None) -> datetime:
+    """
+    The student's current time. The server runs in UTC, so "tomorrow" typed
+    at 10 PM Eastern would land a day off; the browser sends its own clock
+    (ISO with offset) and that wins when it parses.
+    """
+    if client_now:
+        try:
+            parsed = datetime.fromisoformat(client_now)
+            if parsed.tzinfo:
+                return parsed
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc).astimezone()
 
 
-def _time_until(deadline_iso: str | None) -> str:
+def _now_iso(now: datetime) -> str:
+    return now.isoformat(timespec="seconds")
+
+
+def _time_until(deadline_iso: str | None, now: datetime | None = None) -> str:
     """
     Compute a human-readable time-remaining string from a stored ISO
-    deadline, using real server time, never the model's own math.
+    deadline, using real time, never the model's own math. Naive deadlines
+    are wall-clock times in the student's timezone, so they're compared
+    against the student's wall clock.
     Returns 'no deadline set' if deadline_iso is None/unparseable, or
     'overdue' if it's already passed.
     """
@@ -136,7 +154,9 @@ def _time_until(deadline_iso: str | None) -> str:
     except ValueError:
         return "no deadline set"
 
-    now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.now()
+    now = now or _resolve_now()
+    if deadline.tzinfo is None:
+        now = now.replace(tzinfo=None)
     delta = deadline - now
     total_seconds = delta.total_seconds()
 
@@ -207,16 +227,16 @@ def _call_gemini(prompt: str) -> dict:
     return json.loads(_strip_code_fences(_generate(prompt)))
 
 
-def generate_plan(situation: str, available_minutes: int) -> PlanOutput:
+def generate_plan(situation: str, available_minutes: int, client_now: str | None = None) -> PlanOutput:
     """Turn a fresh situation description into a validated plan."""
     prompt = PROMPT_TEMPLATE.format(
-        now_iso=_now_iso(), situation=situation, minutes=available_minutes
+        now_iso=_now_iso(_resolve_now(client_now)), situation=situation, minutes=available_minutes
     )
     raw = _call_gemini(prompt)
     return PlanOutput.model_validate(raw)
 
 
-def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) -> PlanOutput:
+def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int, client_now: str | None = None) -> PlanOutput:
     """
     Take the tasks that weren't finished plus how the last task actually
     went, and produce a revised plan for the remaining time.
@@ -227,16 +247,17 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
                  that was just marked done/partial/skipped, plus optional
                  'commitment', 'away_minutes', 'quiz_correct', 'quiz_total'
     """
+    now = _resolve_now(client_now)
     lines = []
     for t in remaining_tasks:
         deadline = t.get("deadline")
-        time_left = _time_until(deadline)
+        time_left = _time_until(deadline, now)
         deadline_note = f", deadline: {deadline} ({time_left})" if deadline else ", no deadline"
         lines.append(f"- {t['title']} (~{t['duration_minutes']} min){deadline_note}")
     remaining_list_str = "\n".join(lines) or "(none, this was the last task)"
 
     prompt = REPLAN_PROMPT_TEMPLATE.format(
-        now_iso=_now_iso(),
+        now_iso=_now_iso(now),
         last_task_title=last_update.get("title", "unknown task"),
         last_status=last_update.get("status", "unknown"),
         actual_minutes=last_update.get("actual_minutes", "unknown"),
@@ -261,7 +282,9 @@ Deadline: {task_deadline} (time left: {time_left})
 """
 
 
-def answer_question(task: dict, topic: dict | None, question: str, history: list[dict]) -> str:
+def answer_question(
+    task: dict, topic: dict | None, question: str, history: list[dict], client_now: str | None = None
+) -> str:
     """
     Answer a student's question during Crunch Mode, grounded in the current
     task (including real, server-computed time-until-deadline) and
@@ -279,7 +302,7 @@ def answer_question(task: dict, topic: dict | None, question: str, history: list
     system_prompt = ASK_SYSTEM_PROMPT.format(
         task_title=task.get("title", "Unknown task"),
         task_deadline=deadline or "none stated",
-        time_left=_time_until(deadline),
+        time_left=_time_until(deadline, _resolve_now(client_now)),
         topic_context=_topic_context(topic),
     )
 

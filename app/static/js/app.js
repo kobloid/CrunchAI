@@ -2,11 +2,14 @@
   app.js: the CrunchAI study room (app.html).
   Owns session state, every call to the FastAPI backend, the five scenes
   (situation, plan, crunch, check-in, progress) and their transitions, the
-  focus timer (optional focus lock + tab-title countdown), the study-helper
-  chat, and the Prove-it quiz.
+  focus timer (required goal, optional focus lock, tab-title countdown,
+  time's-up alerts), the study-helper chat (restored from saved prompts),
+  the Prove-it quiz, deadline countdowns, and guest/account resume.
 
   Backend contract (see app/main.py):
-    GET   /plan        -> latest PlanOut (404 when there is none)
+    GET   /plan        -> logged-in user's latest PlanOut (404 for guests / none)
+    GET   /plans/{id}  -> a plan the browser owns (guest plans by remembered id)
+    GET   /tasks/{id}/prompts -> saved chat turns for a task
     POST  /situation   {description, available_minutes} -> PlanOut
     PATCH /tasks/{id}  {status, actual_minutes, commitment?, away_minutes?,
                         quiz_correct?, quiz_total?} -> {replanned, plan?} | {plan_complete}
@@ -29,7 +32,7 @@
     plan: "Your plan",
     crunch: "Crunch",
     checkin: "Check-in",
-    progress: "Progress",
+    progress: "Recap",
   };
   const OPEN = new Set(["pending", "in_progress"]);
   const ADDRESSED = new Set(["completed", "partial", "skipped"]);
@@ -39,6 +42,15 @@
   const DEFAULT_TITLE = document.title;
   const PREF_FOCUS_LOCK = "crunch-focus-lock";
   const PREF_TAB_TITLE = "crunch-tab-title";
+  const PREF_ALERTS = "crunch-alerts";
+  const Auth = window.CrunchAuth;
+  const EXAMPLE = {
+    text:
+      "Bio midterm tomorrow at 10 AM and I've only read chapters 1 to 3 of 7. History response paper due Thursday at 11:59 PM, not started. Calc problem sets 6 and 7 due Friday at 5 PM. I keep picking up my phone instead of starting.",
+    minutes: "135",
+    energy: "low",
+    constraints: "Dinner at 7. I focus better in short blocks.",
+  };
 
   function readPref(key, fallback) {
     try {
@@ -60,6 +72,7 @@
   const prefs = {
     focusLock: readPref(PREF_FOCUS_LOCK, false),
     tabTitle: readPref(PREF_TAB_TITLE, true),
+    alerts: readPref(PREF_ALERTS, true),
   };
 
   const state = {
@@ -130,6 +143,58 @@
   function formatDuration(ms) {
     const s = Math.round(ms / 1000);
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${pad(s % 60)}s`;
+  }
+
+  // The student's clock as ISO 8601 with offset, so "tomorrow" means their tomorrow.
+  function clientNow() {
+    const now = new Date();
+    const offset = -now.getTimezoneOffset();
+    const sign = offset >= 0 ? "+" : "-";
+    const abs = Math.abs(offset);
+    const local = new Date(now.getTime() + offset * 60000).toISOString().slice(0, 19);
+    return `${local}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+  }
+
+  // Deadlines are wall-clock times in the student's timezone ("2026-09-28T10:00:00"),
+  // which is exactly how Date parses an ISO string without an offset.
+  function describeDeadline(iso) {
+    const due = iso ? new Date(iso) : null;
+    if (!due || Number.isNaN(due.getTime())) return null;
+    const mins = Math.round((due - Date.now()) / 60000);
+    const time = due.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const sameDay = (a, b) => a.toDateString() === b.toDateString();
+    const when = sameDay(due, new Date())
+      ? `today at ${time}`
+      : sameDay(due, tomorrow)
+        ? `tomorrow at ${time}`
+        : `${due.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} at ${time}`;
+
+    if (mins <= 0) return { text: "Overdue", full: `Was due ${when}`, level: "overdue" };
+    const level = mins < 180 ? "urgent" : mins < 1440 ? "soon" : "later";
+    let text;
+    if (mins < 60) text = `Due in ${mins}m`;
+    else if (mins < 1440) text = `Due in ${Math.floor(mins / 60)}h ${pad(mins % 60)}m`;
+    else text = `Due ${when}`;
+    return { text, full: `Due ${when}`, level };
+  }
+
+  function setDue(node, iso) {
+    const info = describeDeadline(iso);
+    node.hidden = !info;
+    if (!info) {
+      node.removeAttribute("data-deadline");
+      return;
+    }
+    node.dataset.deadline = iso;
+    node.dataset.level = info.level;
+    node.textContent = info.text;
+    node.title = info.full;
+  }
+
+  function refreshDeadlines() {
+    $$("[data-deadline]").forEach((node) => setDue(node, node.dataset.deadline));
   }
 
   function setError(selector, message) {
@@ -295,7 +360,7 @@
     try {
       const plan = await api("/situation", {
         method: "POST",
-        body: { description: fullDescription, available_minutes: minutes },
+        body: { description: fullDescription, available_minutes: minutes, client_now: clientNow() },
       });
       startPlan(plan);
     } catch (err) {
@@ -318,23 +383,32 @@
     state.unlocked = new Set(["situation", "plan", "crunch"]);
     resetTimer(0);
     $("#resume").hidden = true;
+    Auth.rememberGuestPlan(plan.id);
+    $("#save-card").hidden = Boolean(Auth.user);
     renderPlan();
     goTo("plan");
   }
 
-  async function checkResume() {
+  async function fetchResumablePlan() {
+    const guestPlan = Auth.guestPlanId();
+    const path = Auth.user ? "/plan" : guestPlan ? `/plans/${guestPlan}` : null;
+    if (!path) return null;
     try {
-      const plan = await api("/plan");
-      const next = plan.tasks.find((t) => OPEN.has(t.status));
-      if (!next || state.plan) return;
-      $("#resume-task").textContent = next.title;
-      const card = $("#resume");
-      card.hidden = false;
-      if (animate) gsap.from(card, { autoAlpha: 0, y: -10, duration: 0.9, ease: "expo.out" });
-      $("#btn-resume").onclick = () => startPlan(plan);
+      const plan = await api(path);
+      return plan.tasks.some((t) => OPEN.has(t.status)) ? plan : null;
     } catch {
-      /* 404: no plan yet, nothing to resume */
+      return null; // 404: nothing to resume (or the guest plan now belongs to an account)
     }
+  }
+
+  async function checkResume() {
+    const plan = await fetchResumablePlan();
+    if (!plan || state.plan) return;
+    $("#resume-task").textContent = plan.tasks.find((t) => OPEN.has(t.status)).title;
+    const card = $("#resume");
+    card.hidden = false;
+    if (animate) gsap.from(card, { autoAlpha: 0, y: -10, duration: 0.9, ease: "expo.out" });
+    $("#btn-resume").onclick = () => startPlan(plan);
   }
 
   // ---------------- 2 Plan ----------------
@@ -346,9 +420,16 @@
     }
     tasks.forEach((task, i) => {
       const li = el("li");
+      const title = el("span", "q-title", task.title);
+      const info = describeDeadline(task.deadline);
+      if (info) {
+        const due = el("span", "q-due", info.full);
+        due.dataset.level = info.level;
+        title.append(due);
+      }
       li.append(
         el("span", "q-num", String(startIndex + i)),
-        el("span", "q-title", task.title),
+        title,
         el("span", "q-time", `${task.duration_minutes} min`)
       );
       list.append(li);
@@ -375,6 +456,7 @@
     $("#plan-next-title").textContent = next ? next.title : "Everything in this plan is done.";
     $("#plan-next-time").textContent = next ? `${next.duration_minutes} min` : "";
     setStarter($("#plan-starter"), next);
+    setDue($("#plan-next-due"), next && next.deadline);
     $("#btn-enter-crunch").hidden = !next;
     renderQueue($("#plan-queue"), open.slice(1), 2);
 
@@ -390,14 +472,23 @@
 
   // ---------------- 3 Crunch: setup + goal ----------------
   const commitInput = $("#commitment");
+  const MIN_GOAL_LENGTH = 3;
+  const hasGoal = () => Boolean(state.commitment) || commitInput.value.trim().length >= MIN_GOAL_LENGTH;
+
+  function updateStartState() {
+    const t = state.timer;
+    toggleBtn.disabled = !t.running && !(t.totalMs > 0 && hasGoal());
+    $("#commit-help").hidden = hasGoal();
+  }
 
   function lockCommitment() {
     const value = commitInput.value.trim();
-    if (!value) return;
+    if (value.length < MIN_GOAL_LENGTH) return;
     state.commitment = value;
     $("#goal-text").textContent = value;
     $("#commit-edit").hidden = true;
     $("#goal-display").hidden = false;
+    updateStartState();
   }
 
   function clearCommitment() {
@@ -405,13 +496,14 @@
     commitInput.value = "";
     $("#commit-edit").hidden = false;
     $("#goal-display").hidden = true;
+    updateStartState();
   }
 
+  commitInput.addEventListener("input", updateStartState);
   commitInput.addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
-    if (state.timer.running) lockCommitment();
-    else startTimer();
+    startTimer();
   });
 
   function prepareCrunch() {
@@ -423,11 +515,13 @@
     setUrgency($("#crunch-urgency"), state.plan.urgency);
     $("#crunch-title").textContent = task.title;
     $("#timer-block").textContent = `${task.duration_minutes} min block`;
+    setDue($("#crunch-due"), task.deadline);
 
     if (state.crunchTaskId !== task.id) {
       state.crunchTaskId = task.id;
       state.chat.history = [];
       resetChat(task);
+      restoreChat(task.id);
       resetTimer(task.duration_minutes * 60);
       clearCommitment();
     }
@@ -495,10 +589,82 @@
     updateFocusStats();
   }
 
+  // Timers in hidden tabs get throttled to about once a minute; a worker's
+  // ticks don't, so time's up fires on time while the student is elsewhere.
+  let ticker = null;
+  let tickerUrl = null;
+
+  function startTicker() {
+    try {
+      tickerUrl = URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 250);"], { type: "text/javascript" }));
+      ticker = new Worker(tickerUrl);
+      ticker.onmessage = tick;
+    } catch {
+      ticker = null;
+      state.timer.id = setInterval(tick, 250);
+    }
+  }
+
   function stopTimer() {
+    if (ticker) {
+      ticker.terminate();
+      ticker = null;
+      URL.revokeObjectURL(tickerUrl);
+    }
     clearInterval(state.timer.id);
     state.timer.id = null;
     state.timer.running = false;
+  }
+
+  let audioCtx = null;
+
+  // Must run inside a click so the browser allows sound and the permission prompt.
+  function primeAlerts() {
+    if (!prefs.alerts) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      audioCtx.resume();
+    } catch {
+      audioCtx = null;
+    }
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }
+
+  function chime() {
+    if (!audioCtx) return;
+    const start = audioCtx.currentTime;
+    [660, 880].forEach((freq, i) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const t0 = start + i * 0.28;
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.1);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 1.2);
+    });
+  }
+
+  function alertTimeUp() {
+    if (!prefs.alerts) return;
+    chime();
+    if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+      const task = currentTask();
+      const note = new Notification("Time's up", {
+        body: task ? `${task.title}. Come back and tell CrunchAI how it went.` : "Come back and check in.",
+        icon: "assets/mark-128.png",
+        tag: "crunch-timer",
+      });
+      note.onclick = () => {
+        window.focus();
+        note.close();
+      };
+    }
   }
 
   function hideAwayNote() {
@@ -518,6 +684,8 @@
   function finishTimer() {
     stopTimer();
     state.timer.done = true;
+    alertTimeUp();
+    updateStartState();
     setToggle("Restart", false);
     setTimerStatus("Time's up. Wrap up, then tell us how it went.");
   }
@@ -531,15 +699,22 @@
   function startTimer() {
     const t = state.timer;
     if (t.running || !t.totalMs) return;
+    if (!hasGoal()) {
+      $("#commit-help").hidden = false;
+      commitInput.focus();
+      return;
+    }
     if (t.remainingMs <= 0) resetTimer(t.totalMs / 1000);
     lockCommitment();
+    primeAlerts();
     t.running = true;
     t.done = false;
     t.last = performance.now();
     t.hidden = document.hidden;
-    t.id = setInterval(tick, 250);
+    startTicker();
     setToggle("Pause", true);
     setTimerStatus("You're in motion");
+    updateStartState();
     renderTimer();
   }
 
@@ -550,6 +725,7 @@
     stopTimer();
     setToggle("Resume", false);
     setTimerStatus("Paused");
+    updateStartState();
     renderTimer();
   }
 
@@ -565,6 +741,7 @@
     hideAwayNote();
     setToggle("Start", false);
     setTimerStatus("Ready when you are");
+    updateStartState();
     renderTimer();
   }
 
@@ -583,8 +760,16 @@
     renderTimer();
   });
 
+  const alertsInput = $("#pref-alerts");
   lockInput.checked = prefs.focusLock;
   titleInput.checked = prefs.tabTitle;
+  alertsInput.checked = prefs.alerts;
+
+  alertsInput.addEventListener("change", () => {
+    prefs.alerts = alertsInput.checked;
+    writePref(PREF_ALERTS, prefs.alerts);
+    primeAlerts();
+  });
 
   lockInput.addEventListener("change", () => {
     if (state.timer.running) account(performance.now());
@@ -618,7 +803,8 @@
 
   async function loadTopics() {
     try {
-      const topics = await api("/topics");
+      const ids = Auth.user ? "" : Auth.guestTopicIds().join(",");
+      const topics = await api(ids ? `/topics?ids=${ids}` : "/topics");
       topicSelect.replaceChildren(new Option("No topic selected", ""));
       topics.forEach((topic) => topicSelect.append(new Option(topic.name, String(topic.id))));
       topicSelect.value = state.chat.topicId ? String(state.chat.topicId) : "";
@@ -659,6 +845,7 @@
     setError("#topic-error", "");
     try {
       const topic = await api("/topics", { method: "POST", body: { name, notes: notes || null } });
+      Auth.rememberGuestTopic(topic.id);
       state.chat.topicId = topic.id;
       await loadTopics();
       topicForm.reset();
@@ -707,14 +894,14 @@
     chatLog.scrollTo({ top: chatLog.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" });
   }
 
-  function appendMessage(role, content) {
+  function appendMessage(role, content, { quiet = false } = {}) {
     const wrap = el("div", `msg msg--${role}`);
     const body = el("div", "msg-body");
     if (role === "assistant") renderMarkdown(body, content);
     else body.textContent = content;
     wrap.append(el("p", "msg-label", role === "user" ? "You" : "CrunchAI"), body);
     chatLog.append(wrap);
-    if (animate) gsap.from(wrap, { autoAlpha: 0, y: 14, duration: 0.8, ease: "expo.out" });
+    if (animate && !quiet) gsap.from(wrap, { autoAlpha: 0, y: 14, duration: 0.8, ease: "expo.out" });
     scrollChat();
     return wrap;
   }
@@ -735,6 +922,22 @@
       "assistant",
       `Ask me anything about **${task.title}**. I can explain a concept, quiz you, or check your reasoning. Pick or add a topic on the right and I'll use its notes.`
     );
+  }
+
+  async function restoreChat(taskId) {
+    let turns = [];
+    try {
+      turns = await api(`/tasks/${taskId}/prompts`);
+    } catch {
+      return;
+    }
+    // The student may have moved on to another task while this loaded.
+    if (state.crunchTaskId !== taskId || !turns.length) return;
+    turns.forEach((turn) => {
+      appendMessage("user", turn.question, { quiet: true });
+      appendMessage("assistant", turn.answer, { quiet: true });
+      state.chat.history.push({ role: "user", content: turn.question }, { role: "assistant", content: turn.answer });
+    });
   }
 
   function autogrow() {
@@ -760,7 +963,7 @@
     try {
       const data = await api("/ask", {
         method: "POST",
-        body: { task_id: task.id, topic_id: state.chat.topicId, question, history },
+        body: { task_id: task.id, topic_id: state.chat.topicId, question, history, client_now: clientNow() },
       });
       thinking.remove();
       appendMessage("assistant", data.answer);
@@ -937,6 +1140,7 @@
           away_minutes: away || null,
           quiz_correct: total ? correct : null,
           quiz_total: total || null,
+          client_now: clientNow(),
         },
       });
 
@@ -991,6 +1195,7 @@
       $("#progress-next-title").textContent = next.title;
       $("#progress-next-time").textContent = `${next.duration_minutes} min`;
       setStarter($("#progress-starter"), next);
+      setDue($("#progress-next-due"), next.deadline);
     }
 
     $("#progress-queue-wrap").hidden = open.length <= 1;
@@ -1031,11 +1236,65 @@
     goTo("situation");
   });
 
+  // ---------------- Example ----------------
+  let exampleRun = 0;
+
+  function fillExample() {
+    const run = ++exampleRun;
+    $("#time-available").value = EXAMPLE.minutes;
+    const energy = $(`input[name="energy"][value="${EXAMPLE.energy}"]`);
+    if (energy) energy.checked = true;
+    $("#constraints-text").value = EXAMPLE.constraints;
+    setError("#situation-error", "");
+    const show = (text) => {
+      situationText.value = text;
+      situationText.dispatchEvent(new Event("input"));
+    };
+    if (!animate) {
+      show(EXAMPLE.text);
+      return;
+    }
+    let i = 0;
+    const step = () => {
+      if (run !== exampleRun) return;
+      i = Math.min(EXAMPLE.text.length, i + 3);
+      show(EXAMPLE.text.slice(0, i));
+      if (i < EXAMPLE.text.length) requestAnimationFrame(step);
+      else $("#btn-analyze").focus({ preventScroll: true });
+    };
+    requestAnimationFrame(step);
+  }
+
+  $("#btn-example").addEventListener("click", fillExample);
+
   // ---------------- Boot ----------------
+  async function boot() {
+    await Auth.ready;
+    const params = new URLSearchParams(window.location.search);
+    const planId = params.get("plan");
+    if (params.has("example")) fillExample();
+
+    if (planId) {
+      try {
+        startPlan(await api(`/plans/${encodeURIComponent(planId)}`));
+      } catch {
+        setError("#situation-api-error", "That plan couldn't be opened. It may belong to another account.");
+      }
+    } else if (params.has("resume")) {
+      const plan = await fetchResumablePlan();
+      if (plan) startPlan(plan);
+    } else {
+      checkResume();
+    }
+    if (params.toString()) window.history.replaceState(null, "", "app.html");
+  }
+
   renderSteps();
+  updateStartState();
   if (animate) {
     gsap.from(".app-nav", { autoAlpha: 0, duration: 1, ease: "power2.out", clearProps: "all" });
     revealScene(sceneEls.situation);
   }
-  checkResume();
+  setInterval(refreshDeadlines, 60000);
+  boot();
 })();

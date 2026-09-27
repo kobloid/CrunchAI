@@ -19,11 +19,12 @@ Interacts with:
                       and db reads/writes
 
 Notes on auth:
-    This file never hashes or checks passwords — it only stores and reads
-    a `password_hash` string. Hash the password in main.py (or a small
-    auth helper) before calling create_user, and verify it there too.
-    user_id is nullable on plans/topics so existing single-user data and
-    routes keep working untouched until main.py is wired up for auth.
+    This file never hashes or checks passwords; it only stores and reads a
+    `password_hash` string (main.py hashes and verifies). Login sessions
+    live in auth_sessions, keyed by a SHA-256 of the cookie token so a
+    leaked database can't be replayed as live sessions. user_id is nullable
+    on plans/topics: NULL means a guest created it, and claim_plan() /
+    claim_topics() attach guest work to an account at sign-up or log-in.
 """
 
 import sqlite3
@@ -93,6 +94,15 @@ CREATE TABLE IF NOT EXISTS prompts (
     FOREIGN KEY (task_id) REFERENCES tasks (id),
     FOREIGN KEY (topic_id) REFERENCES topics (id)
 );
+
+-- Logged-in browser sessions (not study sessions; those are `sessions`).
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    expires_at TEXT NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users (id)
+);
 """
 
 
@@ -114,6 +124,12 @@ MIGRATIONS = {
     "plans": {"user_id": "INTEGER REFERENCES users (id)"},
     "topics": {"user_id": "INTEGER REFERENCES users (id)"},
     "tasks": {"deadline": "TEXT"},
+    "sessions": {
+        "commitment": "TEXT",
+        "away_minutes": "INTEGER",
+        "quiz_correct": "INTEGER",
+        "quiz_total": "INTEGER",
+    },
 }
 
 
@@ -239,13 +255,40 @@ def update_plan_meta(plan_id: int, urgency: str, summary: str):
 
 # ---- Sessions ----
 
-def create_session(task_id: int, actual_minutes: int, outcome: str):
+def create_session(
+    task_id: int,
+    actual_minutes: int,
+    outcome: str,
+    commitment: str | None = None,
+    away_minutes: int | None = None,
+    quiz_correct: int | None = None,
+    quiz_total: int | None = None,
+):
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO sessions (task_id, completed_at, actual_minutes, outcome)
-               VALUES (?, CURRENT_TIMESTAMP, ?, ?)""",
-            (task_id, actual_minutes, outcome),
+            """INSERT INTO sessions (task_id, completed_at, actual_minutes, outcome,
+                                     commitment, away_minutes, quiz_correct, quiz_total)
+               VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)""",
+            (task_id, actual_minutes, outcome, commitment, away_minutes, quiz_correct, quiz_total),
         )
+
+
+def get_sessions_for_user(user_id: int, limit: int = 200):
+    """A user's logged focus blocks, newest first, with the task and plan they belong to."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT s.id, s.completed_at, s.actual_minutes, s.outcome, s.commitment,
+                      s.away_minutes, s.quiz_correct, s.quiz_total,
+                      t.title AS task_title, p.id AS plan_id
+               FROM sessions s
+               JOIN tasks t ON t.id = s.task_id
+               JOIN plans p ON p.id = t.plan_id
+               WHERE p.user_id = ?
+               ORDER BY s.id DESC
+               LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---- Topics (subject + optional AI context notes) ----
@@ -270,10 +313,40 @@ def get_all_topics(user_id: int | None = None):
         return [dict(r) for r in rows]
 
 
+def get_guest_topics(topic_ids: list[int]):
+    """Guest-owned topics (user_id IS NULL) among the ids a guest's browser remembers."""
+    if not topic_ids:
+        return []
+    with get_connection() as conn:
+        placeholders = ",".join("?" for _ in topic_ids)
+        rows = conn.execute(
+            f"SELECT * FROM topics WHERE user_id IS NULL AND id IN ({placeholders}) ORDER BY name ASC",
+            topic_ids,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def get_topic(topic_id: int):
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM topics WHERE id = ?", (topic_id,)).fetchone()
         return dict(row) if row else None
+
+
+def claim_plan(plan_id: int, user_id: int):
+    """Attach a guest plan to an account. Plans that already have an owner are left alone."""
+    with get_connection() as conn:
+        conn.execute("UPDATE plans SET user_id = ? WHERE id = ? AND user_id IS NULL", (user_id, plan_id))
+
+
+def claim_topics(topic_ids: list[int], user_id: int):
+    if not topic_ids:
+        return
+    with get_connection() as conn:
+        placeholders = ",".join("?" for _ in topic_ids)
+        conn.execute(
+            f"UPDATE topics SET user_id = ? WHERE user_id IS NULL AND id IN ({placeholders})",
+            [user_id, *topic_ids],
+        )
 
 
 def update_topic_notes(topic_id: int, notes: str | None):
@@ -300,12 +373,59 @@ def get_user(user_id: int):
 
 
 def get_user_by_username(username: str):
-    """Used at login time to fetch the stored password_hash for verification."""
+    """Used at login time to fetch the stored password_hash for verification. Case-insensitive."""
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
+            "SELECT * FROM users WHERE username = ? COLLATE NOCASE", (username,)
         ).fetchone()
         return dict(row) if row else None
+
+
+# ---- Auth sessions (logged-in browsers) ----
+
+def create_auth_session(token_hash: str, user_id: int, expires_at: str):
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)",
+            (token_hash, user_id, expires_at),
+        )
+
+
+def get_user_by_session(token_hash: str, now: str):
+    """The user behind a live (unexpired) session, or None."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT u.* FROM auth_sessions s JOIN users u ON u.id = s.user_id
+               WHERE s.token_hash = ? AND s.expires_at > ?""",
+            (token_hash, now),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def delete_auth_session(token_hash: str):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+
+
+# ---- Plans for a user (progress page) ----
+
+def get_plans_for_user(user_id: int, limit: int = 20):
+    """A user's plans, newest first, with how many visible tasks are open vs addressed."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT p.id, p.created_at, p.urgency, p.summary,
+                      COALESCE(SUM(CASE WHEN t.status IN ('pending', 'in_progress') THEN 1 ELSE 0 END), 0) AS open_tasks,
+                      COALESCE(SUM(CASE WHEN t.status IN ('completed', 'partial', 'skipped') THEN 1 ELSE 0 END), 0) AS addressed_tasks,
+                      (SELECT title FROM tasks WHERE plan_id = p.id AND status IN ('pending', 'in_progress')
+                       ORDER BY priority ASC, id ASC LIMIT 1) AS next_task
+               FROM plans p LEFT JOIN tasks t ON t.plan_id = p.id
+               WHERE p.user_id = ?
+               GROUP BY p.id
+               ORDER BY p.id DESC
+               LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 # ---- Prompts (what the student asked CrunchAI during a /ask turn, and the answer) ----

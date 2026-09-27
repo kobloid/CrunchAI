@@ -76,6 +76,11 @@ html.intro-pending .nav {
   color: var(--text-muted);
 }
 
+.hero-example {
+  margin-top: 10px;
+  font-size: 14px;
+}
+
 /* ---------- Showcase: the plan preview expands on scroll ---------- */
 .expand {
   position: relative;
@@ -668,7 +673,7 @@ html.intro-pending .nav {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 899px) {
-  .nav-link {
+  .nav-right > .nav-link {
     display: none;
   }
 

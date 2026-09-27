@@ -346,6 +346,13 @@ ol {
   opacity: 0.75;
 }
 
+.text-link {
+  color: var(--blue-ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
 /* ---------- Brand ---------- */
 .brand {
   display: inline-flex;
@@ -407,6 +414,115 @@ ol {
 
 .nav-link:hover {
   color: var(--text);
+}
+
+/* ---------- Account menu (filled by auth.js) ---------- */
+[data-account] {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+[data-account] .nav-link {
+  white-space: nowrap;
+}
+
+@media (max-width: 400px) {
+  .nav-right {
+    gap: 6px;
+  }
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  font-size: 14px;
+  font-weight: 500;
+  transition: background-color 0.3s, border-color 0.3s;
+}
+
+.account-btn:hover,
+.account-btn[aria-expanded="true"] {
+  background: var(--surface-2);
+  border-color: var(--text-muted);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  background: var(--blue);
+  color: var(--on-blue);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.account-name {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 80;
+  display: grid;
+  min-width: 220px;
+  padding: 6px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.account-pop-who {
+  padding: 10px 12px 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.account-pop-who strong {
+  color: var(--text);
+}
+
+.account-pop-item {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  text-align: left;
+}
+
+.account-pop-item:hover {
+  background: var(--surface-2);
+}
+
+@media (max-width: 520px) {
+  .account-name {
+    display: none;
+  }
+
+  .account-btn {
+    padding: 0 6px;
+  }
 }
 
 /* ---------- Theme toggle ---------- */
@@ -541,6 +657,95 @@ html[data-theme="light"] .theme-toggle .icon-moon {
   outline-offset: 3px;
 }
 
+/* ---------- Form fields (app, account) ---------- */
+.field {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.field-label {
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.optional {
+  margin-left: 6px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+textarea,
+input[type="text"],
+input[type="password"],
+select {
+  width: 100%;
+  padding: 13px 15px;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+html[data-theme="light"] textarea,
+html[data-theme="light"] input[type="text"],
+html[data-theme="light"] input[type="password"],
+html[data-theme="light"] select {
+  background: var(--surface);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 140px;
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+textarea:hover,
+input[type="text"]:hover,
+input[type="password"]:hover,
+select:hover {
+  border-color: var(--text-muted);
+}
+
+textarea:focus-visible,
+input[type="text"]:focus-visible,
+input[type="password"]:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+
+.field-error,
+.form-error {
+  color: var(--red);
+  font-size: 14px;
+}
+
+.form-error {
+  margin: -4px 0 16px;
+}
+
 /* ---------- Custom cursor ---------- */
 html.has-cursor,
 html.has-cursor * {
@@ -548,6 +753,7 @@ html.has-cursor * {
 }
 
 html.has-cursor input[type="text"],
+html.has-cursor input[type="password"],
 html.has-cursor textarea {
   cursor: text !important;
 }

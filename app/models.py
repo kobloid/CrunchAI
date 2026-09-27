@@ -41,6 +41,7 @@ class TaskStatus(str, Enum):
 class SituationInput(BaseModel):
     description: str = Field(..., description="Student's free-text description of their situation")
     available_minutes: int = Field(..., gt=0, description="How much time the student has right now")
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 class TaskUpdate(BaseModel):
@@ -50,6 +51,7 @@ class TaskUpdate(BaseModel):
     away_minutes: Optional[int] = Field(None, ge=0, description="Minutes spent off the tab while focus lock was on")
     quiz_correct: Optional[int] = Field(None, ge=0)
     quiz_total: Optional[int] = Field(None, ge=0)
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 # ---- Produced by planner.py (and validated against Gemini's output) ----
@@ -112,6 +114,7 @@ class AskRequest(BaseModel):
     topic_id: Optional[int] = None
     question: str
     history: list[ChatMessage] = Field(default_factory=list)
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 class AskResponse(BaseModel):
@@ -169,12 +172,23 @@ class PromptOut(BaseModel):
     answer: str
 
 
-# ---- Users (not yet wired into any route in main.py) ----
+# ---- Users and auth ----
 
-class UserCreate(BaseModel):
-    username: str
-    password: str = Field(..., min_length=8, description="Plaintext; main.py hashes before storing")
+class GuestClaim(BaseModel):
+    """Guest work to attach to the account at sign-up or log-in."""
+    claim_plan_id: Optional[int] = None
+    claim_topic_ids: list[int] = Field(default_factory=list)
+
+
+class UserCreate(GuestClaim):
+    username: str = Field(..., pattern=r"^[A-Za-z0-9_.]{3,24}$", description="3 to 24 letters, numbers, dots or underscores")
+    password: str = Field(..., min_length=8, max_length=128, description="Plaintext; main.py hashes before storing")
     email: Optional[str] = None
+
+
+class LoginRequest(GuestClaim):
+    username: str
+    password: str
 
 
 class UserOut(BaseModel):
@@ -182,7 +196,48 @@ class UserOut(BaseModel):
     username: str
     email: Optional[str] = None
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
 
+class MeOut(BaseModel):
+    user: Optional[UserOut] = None
+
+
+# ---- Progress page ----
+
+class PlanSummary(BaseModel):
+    id: int
+    created_at: str
+    urgency: Optional[str] = None
+    summary: Optional[str] = None
+    open_tasks: int = 0
+    addressed_tasks: int = 0
+    next_task: Optional[str] = None
+
+
+class Block(BaseModel):
+    id: int
+    completed_at: Optional[str] = None
+    actual_minutes: Optional[int] = None
+    outcome: Optional[str] = None
+    commitment: Optional[str] = None
+    away_minutes: Optional[int] = None
+    quiz_correct: Optional[int] = None
+    quiz_total: Optional[int] = None
+    task_title: str
+    plan_id: int
+
+
+class ProgressTotals(BaseModel):
+    blocks: int
+    focused_minutes: int
+    completed: int
+    partial: int
+    skipped: int
+    recall_correct: int
+    recall_total: int
+
+
+class ProgressOut(BaseModel):
+    user: UserOut
+    totals: ProgressTotals
+    plans: list[PlanSummary]
+    blocks: list[Block]
