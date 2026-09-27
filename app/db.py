@@ -24,10 +24,12 @@ DB_PATH = "crunchai.db"
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     available_minutes INTEGER,
     urgency TEXT,
-    summary TEXT
+    summary TEXT,
+    FOREIGN KEY (used_id) References users (id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -53,8 +55,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     name TEXT NOT NULL,
-    notes TEXT
+    notes TEXT,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 """
 
@@ -63,6 +67,7 @@ CREATE TABLE IF NOT EXISTS topics (
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -216,3 +221,52 @@ def get_topic(topic_id: int):
 def update_topic_notes(topic_id: int, notes: str | None):
     with get_connection() as conn:
         conn.execute("UPDATE topics SET notes = ? WHERE id = ?", (notes, topic_id))
+
+# ---- Users ----
+
+def create_user(username: str, password_hash: str, email: str | None = None) -> int:
+    """Insert a new user, return its id. Caller must hash the password first."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            (username, email, password_hash),
+        )
+        return cur.lastrowid
+
+
+def get_user(user_id: int):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_username(username: str):
+    """Used at login time to fetch the stored password_hash for verification."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+# ---- Prompts (what the student asked CrunchAI during a /ask turn, and the answer) ----
+
+def create_prompt(task_id: int, topic_id: int | None, question: str, answer: str) -> int:
+    """Persist one /ask turn. Called from main.py right after planner.answer_question()."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO prompts (task_id, topic_id, question, answer)
+               VALUES (?, ?, ?, ?)""",
+            (task_id, topic_id, question, answer),
+        )
+        return cur.lastrowid
+
+
+def get_prompts_for_task(task_id: int):
+    """Full Q&A history for a task, oldest first — used to rehydrate the chat on load."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM prompts WHERE task_id = ? ORDER BY id ASC",
+            (task_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]

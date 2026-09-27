@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db, planner
 from app.models import (
     SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut,
-    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse,
+    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse, PromptOut
 )
 
 app = FastAPI(title="CrunchAI")
@@ -63,6 +63,12 @@ def get_current_plan():
         raise HTTPException(status_code=404, detail="No plan yet. POST /situation first.")
     return _load_plan_out(plan_row["id"])
 
+@app.get("/tasks/{task_id}/prompts", response_model=list[PromptOut])
+def get_task_prompts(task_id: int):
+    """Full Q&A history for a task, so the frontend can rehydrate a chat on load."""
+    if not db.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return [PromptOut(**p) for p in db.get_prompts_for_task(task_id)]
 
 @app.patch("/tasks/{task_id}")
 def update_task(task_id: int, update: TaskUpdate):
@@ -155,6 +161,7 @@ def ask_study_helper(request: AskRequest):
 
     history = [{"role": m.role, "content": m.content} for m in request.history]
     answer = planner.answer_question(task, topic, request.question, history)
+    db.create_prompt(request.task_id, request.topic_id, request.question, answer)
     return AskResponse(answer=answer)
 
 

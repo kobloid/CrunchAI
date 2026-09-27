@@ -111,3 +111,24 @@ class AskRequest(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
+
+
+class PromptOut(BaseModel):
+    """One persisted /ask turn, as returned by GET /tasks/{task_id}/prompts."""
+    id: int
+    task_id: int
+    topic_id: Optional[int] = None
+    question: str
+    answer: str
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str = Field(..., min_length=8, description="Plaintext; main.py hashes before storing")
+    email: Optional[str] = None
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: Optional[str] = None
