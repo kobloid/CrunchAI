@@ -131,3 +131,8 @@ class UserOut(BaseModel):
     id: int
     username: str
     email: Optional[str] = None
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
