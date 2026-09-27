@@ -3,17 +3,27 @@ db.py
 
 Purpose:
     Owns all SQLite access for CrunchAI: the schema definition and every
-    insert/select/update against the tasks, sessions, plans, and topics
-    tables. Nothing outside this file should write raw SQL.
+    insert/select/update against the users, plans, tasks, sessions, topics,
+    and prompts tables. Nothing outside this file should write raw SQL.
 
 Interacts with:
     - main.py      -> routes call these functions instead of touching
-                      sqlite3 directly
+                      sqlite3 directly, including persisting each /ask
+                      turn via create_prompt() after planner.answer_question()
+                      returns
     - models.py    -> rows returned here get shaped into PlanOut / TaskOut /
-                      Topic before going back to the client
+                      Topic / UserOut / PromptOut before going back to the
+                      client
     - planner.py   -> does NOT import this directly; main.py is the glue
                       between planner output (including answer_question())
                       and db reads/writes
+
+Notes on auth:
+    This file never hashes or checks passwords — it only stores and reads
+    a `password_hash` string. Hash the password in main.py (or a small
+    auth helper) before calling create_user, and verify it there too.
+    user_id is nullable on plans/topics so existing single-user data and
+    routes keep working untouched until main.py is wired up for auth.
 """
 
 import sqlite3
@@ -22,12 +32,22 @@ from contextlib import contextmanager
 DB_PATH = "crunchai.db"
 
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS plans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     available_minutes INTEGER,
     urgency TEXT,
-    summary TEXT
+    summary TEXT,
+    FOREIGN KEY (user_id) REFERENCES users (id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -52,8 +72,25 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS topics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     name TEXT NOT NULL,
-    notes TEXT
+    notes TEXT,
+    FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+-- One row per /ask turn: what the student prompted CrunchAI with, for a
+-- given task (and optionally a topic), and what came back. This is the
+-- persisted study-session history that request.history currently only
+-- carries client-side.
+CREATE TABLE IF NOT EXISTS prompts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    topic_id INTEGER,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks (id),
+    FOREIGN KEY (topic_id) REFERENCES topics (id)
 );
 """
 
@@ -62,6 +99,7 @@ CREATE TABLE IF NOT EXISTS topics (
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -76,22 +114,28 @@ def init_db():
 
 # ---- Plans ----
 
-def create_plan(available_minutes: int, urgency: str, summary: str) -> int:
-    """Insert a new plan row, return its id."""
+def create_plan(available_minutes: int, urgency: str, summary: str, user_id: int | None = None) -> int:
+    """Insert a new plan row, return its id. user_id is optional until main.py has auth."""
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO plans (available_minutes, urgency, summary) VALUES (?, ?, ?)",
-            (available_minutes, urgency, summary),
+            "INSERT INTO plans (user_id, available_minutes, urgency, summary) VALUES (?, ?, ?, ?)",
+            (user_id, available_minutes, urgency, summary),
         )
         return cur.lastrowid
 
 
-def get_latest_plan():
-    """Return the most recently created plan row, or None."""
+def get_latest_plan(user_id: int | None = None):
+    """Return the most recently created plan row, optionally scoped to a user, or None."""
     with get_connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM plans ORDER BY id DESC LIMIT 1"
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT * FROM plans WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM plans ORDER BY id DESC LIMIT 1"
+            ).fetchone()
         return dict(row) if row else None
 
 
@@ -191,18 +235,23 @@ def create_session(task_id: int, actual_minutes: int, outcome: str):
 
 # ---- Topics (subject + optional AI context notes) ----
 
-def create_topic(name: str, notes: str | None) -> int:
+def create_topic(name: str, notes: str | None, user_id: int | None = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            "INSERT INTO topics (name, notes) VALUES (?, ?)",
-            (name, notes),
+            "INSERT INTO topics (user_id, name, notes) VALUES (?, ?, ?)",
+            (user_id, name, notes),
         )
         return cur.lastrowid
 
 
-def get_all_topics():
+def get_all_topics(user_id: int | None = None):
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM topics ORDER BY name ASC").fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM topics WHERE user_id = ? ORDER BY name ASC", (user_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM topics ORDER BY name ASC").fetchall()
         return [dict(r) for r in rows]
 
 
@@ -215,3 +264,53 @@ def get_topic(topic_id: int):
 def update_topic_notes(topic_id: int, notes: str | None):
     with get_connection() as conn:
         conn.execute("UPDATE topics SET notes = ? WHERE id = ?", (notes, topic_id))
+
+
+# ---- Users ----
+
+def create_user(username: str, password_hash: str, email: str | None = None) -> int:
+    """Insert a new user, return its id. Caller must hash the password first."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+            (username, email, password_hash),
+        )
+        return cur.lastrowid
+
+
+def get_user(user_id: int):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_username(username: str):
+    """Used at login time to fetch the stored password_hash for verification."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+# ---- Prompts (what the student asked CrunchAI during a /ask turn, and the answer) ----
+
+def create_prompt(task_id: int, topic_id: int | None, question: str, answer: str) -> int:
+    """Persist one /ask turn. Called from main.py right after planner.answer_question()."""
+    with get_connection() as conn:
+        cur = conn.execute(
+            """INSERT INTO prompts (task_id, topic_id, question, answer)
+               VALUES (?, ?, ?, ?)""",
+            (task_id, topic_id, question, answer),
+        )
+        return cur.lastrowid
+
+
+def get_prompts_for_task(task_id: int):
+    """Full Q&A history for a task, oldest first — used to rehydrate the chat on load."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM prompts WHERE task_id = ? ORDER BY id ASC",
+            (task_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]

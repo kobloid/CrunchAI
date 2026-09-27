@@ -23,6 +23,8 @@ Interacts with:
                       create_topic / get_all_topics / get_topic / update_topic_notes
     - app/static/  -> index.html (landing) / app.html (the app) / style.css / app.js
 """
+import hashlib
+import secrets
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -30,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db, planner
 from app.models import (
     SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut,
-    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse,
+    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse, PromptOut, UserCreate, UserOut, LoginRequest,
     QuizRequest, Quiz, QuizGradeRequest, QuizGrade,
 )
 
@@ -159,9 +161,14 @@ def ask_study_helper(request: AskRequest):
         raise HTTPException(status_code=404, detail="Task not found")
 
     topic = db.get_topic(request.topic_id) if request.topic_id else None
-
     history = [{"role": m.role, "content": m.content} for m in request.history]
     answer = planner.answer_question(task, topic, request.question, history)
+
+    # Persist this turn so it survives a refresh and can be replayed via
+    # GET /tasks/{task_id}/prompts, instead of living only in the
+    # client-held `history` the frontend re-sends each time.
+    db.create_prompt(request.task_id, request.topic_id, request.question, answer)
+
     return AskResponse(answer=answer)
 
 
@@ -184,6 +191,47 @@ def grade_quiz(request: QuizGradeRequest):
     topic = db.get_topic(request.topic_id) if request.topic_id else None
     return planner.grade_quiz(task, topic, request.questions, request.answers)
 
+
+@app.get("/tasks/{task_id}/prompts", response_model=list[PromptOut])
+def get_task_prompts(task_id: int):
+    """Full Q&A history for a task, so the frontend can rehydrate a chat on load."""
+    if not db.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return [PromptOut(**p) for p in db.get_prompts_for_task(task_id)]
+
+
+@app.post("/users", response_model=UserOut)
+def create_user(user: UserCreate):
+    user_id = db.create_user(user.username, user.password, user.email)
+    return UserOut(id=user_id, username=user.username, email=user.email)
+
+
+@app.post("/signup", response_model=UserOut)
+def signup(payload: UserCreate):
+    if db.get_user_by_username(payload.username):
+        raise HTTPException(status_code=400, detail="Username already taken")
+    password_hash = _hash_password(payload.password)
+    user_id = db.create_user(payload.username, password_hash, payload.email)
+    return UserOut(id=user_id, username=payload.username, email=payload.email)
+
+
+def _hash_password(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000)
+    return f"{salt}${digest.hex()}"
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    salt, _, _ = stored_hash.partition("$")
+    return secrets.compare_digest(_hash_password(password, salt), stored_hash)
+
+
+@app.post("/login", response_model=UserOut)
+def login(payload: LoginRequest):
+    user = db.get_user_by_username(payload.username)
+    if not user or not _verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return UserOut(id=user["id"], username=user["username"], email=user["email"])
 
 # Serve the frontend last, so it doesn't shadow the API routes above.
 # html=True makes "/" resolve to index.html.
