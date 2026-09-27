@@ -1,359 +1,436 @@
-<!--
-  app.html
-
-  Purpose:
-      The actual CrunchAI app — separate from the marketing landing page
-      (index.html) on purpose. Contains every view (Situation, Recovery
-      Plan, Crunch Mode, Check-in, Progress) as <section> blocks; app.js
-      shows/hides them and fills in real data from the backend.
-
-  Interacts with:
-      - style.css   -> all visual styling, warm/cool theme variables
-      - app.js      -> view switching, state, and every fetch() call to
-                       the FastAPI backend (/situation, /plan, /tasks/{id})
-      - index.html  -> the landing page links here via "Start academic
-                       recovery"; this page doesn't link back
-
-  NOTE ON WHAT'S REAL VS. MOCKED (matches the Figma):
-      - "Detected deadlines" panel        -> MOCKED (static demo data).
-        Backend doesn't parse deadlines out of free text yet — it would
-        need a separate Gemini extraction step to be real.
-      - "Current energy" (Low/Okay/Good)  -> UI-only. Not sent to the
-        backend; there's no field for it in SituationInput yet.
-      - "Anything to work around"         -> folded into the description
-        text sent to /situation, since there's no dedicated field for it.
-      - "Why this order" panel            -> MOCKED. The backend doesn't
-        return reasoning, just urgency/summary/tasks.
-      - Progress stats (today %, streak)  -> computed client-side from
-        this session only; nothing is persisted across page reloads.
-      - "Maya Jensen" account footer      -> MOCKED placeholder. No
-        accounts/auth exist in the backend.
-      - Warm/Cool theme toggle            -> fully real, pure CSS
-        (this page doesn't have its own toggle in the header — add one
-        here too if you want it switchable mid-app, not just on landing).
-      - Crunch Mode chat / topics         -> REAL. POST /ask answers
-        questions grounded in the current task + selected topic's notes;
-        GET/POST /topics manage the topic list. Chat history is kept in
-        memory only (app.js state), not persisted or sent with each
-        request beyond the current session — reloading the page clears it.
-        File pasting as a topic source is planned but not built yet.
--->
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>CrunchAI — App</title>
+  <title>CrunchAI · Get your plan</title>
+  <meta name="description" content="Tell CrunchAI what you've been putting off. Get a plan for the time you have, study with focus, and let the plan adapt as you go." />
+  <link rel="icon" type="image/png" href="assets/mark-128.png" />
 
-  <link rel="stylesheet" href="style.css" />
-
-  <!-- KaTeX math styling -->
-  <link
-    rel="stylesheet"
-    href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css"
-  />
-
-  <!-- Markdown renderer -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-
-  <!-- Sanitizes generated HTML -->
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
-
-  <!-- Math renderer -->
-  <script
-    defer
-    src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js">
+  <script>
+    (function () {
+      var d = document.documentElement, t;
+      try { t = localStorage.getItem("crunch-theme"); } catch (e) {}
+      if (t !== "light" && t !== "dark") {
+        t = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      }
+      d.dataset.theme = t;
+    })();
   </script>
 
-  <script
-    defer
-    src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js">
-  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Instrument+Sans:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/app.css" />
 </head>
-<body data-theme="warm">
+<body class="app-body">
+  <a class="skip-link" href="#stage">Skip to content</a>
 
-  <section class="view-app-page">
-    <aside class="sidebar">
-      <a href="index.html" class="brand brand-link"><span class="brand-mark">✦</span> Crunch<span class="brand-accent">AI</span></a>
-      <nav class="sidebar-nav">
-        <button class="nav-item active" data-nav="situation">📋 Situation</button>
-        <button class="nav-item" data-nav="plan" disabled>⇄ Recovery plan</button>
-        <button class="nav-item" data-nav="crunch" disabled>⏱ Crunch Mode</button>
-        <button class="nav-item" data-nav="progress" disabled>📶 Progress</button>
-      </nav>
-      <div class="sidebar-footer">
-        <div class="avatar">MJ</div>
-        <div><strong>Maya Jensen</strong><div class="muted">Fall term</div></div>
-      </div>
-    </aside>
+  <header class="nav app-nav">
+    <a class="brand" href="index.html" aria-label="CrunchAI home">
+      <img src="assets/mark-128.png" alt="" width="32" height="32" />
+      <span class="brand-word">Crunch<span class="ai">AI</span></span>
+    </a>
 
-    <main class="main-panel">
+    <nav class="steps" aria-label="Session steps">
+      <ol>
+        <li><button class="step" type="button" data-step="situation" aria-current="step"><span class="step-num">1</span><span class="step-label">Situation</span></button></li>
+        <li><button class="step" type="button" data-step="plan" disabled><span class="step-num">2</span><span class="step-label">Plan</span></button></li>
+        <li><button class="step" type="button" data-step="crunch" disabled><span class="step-num">3</span><span class="step-label">Crunch</span></button></li>
+        <li><button class="step" type="button" data-step="checkin" disabled><span class="step-num">4</span><span class="step-label">Check-in</span></button></li>
+        <li><button class="step" type="button" data-step="progress" disabled><span class="step-num">5</span><span class="step-label">Progress</span></button></li>
+      </ol>
+    </nav>
 
-      <!-- ---- Situation ---- -->
-      <section id="panel-situation" class="panel active">
-        <div class="panel-header">
-          <div class="eyebrow">STEP 1 OF 3</div>
-          <h2>Tell us what's going on</h2>
-        </div>
-        <div class="panel-body two-col">
-          <div class="card main-card">
-            <h1 class="card-title">Give us the messy version.</h1>
-            <p class="muted">No need to organize it first. Deadlines, unfinished work, worries—we'll sort it with you.</p>
+    <button class="icon-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch to light mode" aria-pressed="true">
+      <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    </button>
+  </header>
 
-            <label class="field-label">What's piling up?</label>
-            <textarea id="situation-text" maxlength="1000" placeholder="e.g. Biology exam tomorrow at 10 AM and I've only reviewed chapters 1-3..."></textarea>
-            <div class="char-count"><span id="char-count">0</span> / 1000</div>
+  <main id="stage" class="stage" tabindex="-1">
+    <p id="scene-announcer" class="sr-only" aria-live="polite"></p>
+
+    <!-- ============ 1 Situation ============ -->
+    <section class="scene" data-scene="situation" aria-labelledby="situation-title">
+      <div class="scene-inner two-col">
+        <div class="scene-main">
+          <div class="resume surface" id="resume" data-stagger hidden>
+            <div>
+              <p class="resume-label">You have a plan in progress</p>
+              <p class="resume-task" id="resume-task"></p>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm" id="btn-resume">Continue</button>
+          </div>
+
+          <p class="eyebrow" data-stagger>Step 1 of 5 &middot; Situation</p>
+          <h1 class="display scene-title" id="situation-title" tabindex="-1" data-stagger>What are you <em>avoiding?</em></h1>
+          <p class="lead" data-stagger>Type it the way it's in your head. Deadlines, half-finished work, worries. We'll sort it.</p>
+
+          <form class="form-card surface" id="situation-form" novalidate data-stagger>
+            <span class="thinking-bar" aria-hidden="true"></span>
+
+            <div class="field">
+              <label class="field-label" for="situation-text">Everything you've been putting off</label>
+              <textarea id="situation-text" rows="6" maxlength="1000" aria-describedby="situation-error situation-count" placeholder="e.g. Bio midterm tomorrow at 10 AM, I've only read chapters 1 to 3. History paper due Thursday. Calc sets 6 and 7 due Friday."></textarea>
+              <div class="field-foot">
+                <span class="field-error" id="situation-error" hidden></span>
+                <span class="field-count num" id="situation-count">0 / 1000</span>
+              </div>
+            </div>
 
             <div class="field-row">
-              <div class="field-col">
-                <label class="field-label">Time available today</label>
-                <select id="time-available">
-                  <option value="30">30 minutes</option>
-                  <option value="60">1 hour</option>
-                  <option value="90">1 hour 30 minutes</option>
-                  <option value="135" selected>2 hours 15 minutes</option>
-                  <option value="180">3 hours</option>
-                  <option value="240">4 hours</option>
-                </select>
-              </div>
-              <div class="field-col">
-                <label class="field-label">Current energy <span class="optional-tag">(not yet used by AI)</span></label>
-                <div class="segmented" id="energy-segmented">
-                  <button data-energy="low">Low</button>
-                  <button data-energy="okay" class="active">Okay</button>
-                  <button data-energy="good">Good</button>
+              <div class="field">
+                <label class="field-label" for="time-available">Time you have right now</label>
+                <div class="select-wrap">
+                  <select id="time-available">
+                    <option value="30">30 minutes</option>
+                    <option value="60">1 hour</option>
+                    <option value="90">1 hour 30 minutes</option>
+                    <option value="135" selected>2 hours 15 minutes</option>
+                    <option value="180">3 hours</option>
+                    <option value="240">4 hours</option>
+                  </select>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
                 </div>
               </div>
+              <fieldset class="field">
+                <legend class="field-label">How much energy do you have?</legend>
+                <div class="segmented">
+                  <label><input type="radio" name="energy" value="low" /><span>Low</span></label>
+                  <label><input type="radio" name="energy" value="okay" checked /><span>Okay</span></label>
+                  <label><input type="radio" name="energy" value="good" /><span>Good</span></label>
+                </div>
+              </fieldset>
             </div>
 
-            <label class="field-label">Anything we should work around? <span class="optional-tag">Optional</span></label>
-            <input type="text" id="constraints-text" placeholder="e.g. Dinner from 6:30-7:15 PM. I focus better in short blocks." />
-
-            <div class="submit-row">
-              <span class="lock-note">🔒 Only used to build this plan</span>
-              <button class="btn-primary" id="btn-analyze">✦ Analyze my situation</button>
-            </div>
-          </div>
-
-          <aside class="side-card">
-            <div class="side-card-head">
-              <h4>Detected deadlines</h4>
-              <span class="mock-badge" title="Mocked: backend doesn't extract deadlines yet">MOCK</span>
-            </div>
-            <div class="deadline-row"><div><strong>Biology 201</strong><div class="muted">Midterm exam</div><div class="muted small">Tomorrow · 10:00 AM</div></div><span class="tag tag-urgent">URGENT</span></div>
-            <div class="deadline-row"><div><strong>World History</strong><div class="muted">Response paper</div><div class="muted small">Thursday · 11:59 PM</div></div><span class="tag tag-warn">DUE SOON</span></div>
-            <div class="deadline-row"><div><strong>Calculus II</strong><div class="muted">Problem sets 6 &amp; 7</div><div class="muted small">Friday · 5:00 PM</div></div><span class="tag tag-neutral">UPCOMING</span></div>
-
-            <div class="callout-card">
-              <div class="callout-title">✦ We'll prioritize, not just schedule.</div>
-              <p class="muted">CrunchAI weighs urgency, impact, and your available energy.</p>
-            </div>
-          </aside>
-        </div>
-      </section>
-
-      <!-- ---- Recovery Plan ---- -->
-      <section id="panel-plan" class="panel">
-        <div class="panel-header">
-          <div class="eyebrow">ANALYSIS COMPLETE</div>
-          <h2>Your academic recovery plan</h2>
-        </div>
-        <div class="panel-body two-col">
-          <div class="col-main">
-            <div class="banner-success">
-              <span id="plan-summary-text">We found a realistic path through tonight.</span>
-              <span class="banner-time" id="plan-available-time">-- available</span>
+            <div class="field">
+              <label class="field-label" for="constraints-text">Anything to work around? <span class="optional">Optional</span></label>
+              <input type="text" id="constraints-text" placeholder="e.g. Dinner 6:30 to 7:15. I focus better in short blocks." />
             </div>
 
-            <div class="hero-task" id="hero-task">
-              <div class="hero-task-top">
-                <span>⚡ YOUR ONE NEXT MOVE</span>
-                <span class="tag tag-urgent" id="hero-task-badge">URGENT</span>
-              </div>
-              <h3 id="hero-task-title">—</h3>
-              <p class="muted" id="hero-task-desc"></p>
-              <div class="hero-task-bottom">
-                <span class="hero-time" id="hero-task-time">-- min</span>
-                <button class="btn-white" id="btn-enter-crunch">Enter Crunch Mode →</button>
-              </div>
-            </div>
+            <p class="form-error" id="situation-api-error" role="alert" hidden></p>
 
-            <h4 class="after-that-label">After that</h4>
-            <div id="after-that-list"></div>
-          </div>
-
-          <aside class="side-card">
-            <div class="side-card-head">
-              <h4>Why this order?</h4>
-              <span class="mock-badge" title="Mocked: backend doesn't return reasoning fields yet">MOCK</span>
-            </div>
-            <div class="why-row"><span class="why-icon">🕐</span><div><strong>Urgency</strong><div class="muted">Based on task priority</div></div></div>
-            <div class="why-row"><span class="why-icon">◎</span><div><strong>Impact</strong><div class="muted">Higher-priority tasks first</div></div></div>
-            <div class="why-row"><span class="why-icon">📶</span><div><strong>Energy</strong><div class="muted">Not yet factored in</div></div></div>
-          </aside>
-        </div>
-      </section>
-
-      <!-- ---- Crunch Mode (AI study helper, chat-first) ---- -->
-      <section id="panel-crunch" class="panel">
-        <div class="panel-header">
-          <div class="eyebrow">CRUNCH MODE</div>
-          <h2>Study this, right now.</h2>
-        </div>
-        <div class="panel-body two-col">
-          <div class="card main-card chat-card">
-            <div class="crunch-top-row">
-              <span class="tag tag-urgent" id="crunch-badge">URGENT</span>
-              <span class="muted" id="crunch-task-index">CURRENT TASK · 1 OF 1</span>
-            </div>
-            <h3 id="crunch-task-title">—</h3>
-            <p class="muted" id="crunch-task-desc"></p>
-
-            <div class="chat-window" id="chat-window">
-              <div class="chat-message chat-assistant">
-                <strong>CrunchAI</strong>
-                <p>Ask me anything about this task — explain a concept, quiz yourself, or check your reasoning. I'll use the topic notes on the right if you've added any.</p>
-              </div>
-            </div>
-
-            <div class="chat-input-row">
-              <textarea id="chat-input" placeholder="Ask a question about this task..." rows="2"></textarea>
-              <button class="btn-primary" id="btn-send-chat">Send</button>
-            </div>
-          </div>
-
-          <aside class="side-card">
-            <div class="side-card-head"><h4>Topic</h4></div>
-            <select id="topic-select">
-              <option value="">No topic selected</option>
-            </select>
-            <button class="link-btn" id="btn-new-topic-toggle" style="margin-top:10px;">+ Add new topic</button>
-
-            <div id="new-topic-form" style="display:none; margin-top:12px;">
-              <label class="field-label">Topic name</label>
-              <input type="text" id="new-topic-name" placeholder="e.g. Biology 201" />
-              <label class="field-label">Context notes <span class="optional-tag">Optional</span></label>
-              <textarea id="new-topic-notes" placeholder="Paste any notes you want the AI to reference..." rows="3"></textarea>
-              <button class="btn-primary" id="btn-save-topic" style="margin-top:10px;">Save topic</button>
-            </div>
-
-            <div class="side-card-head" style="margin-top:24px;">
-              <h4>Focus timer</h4>
-              <span id="crunch-block-time" class="muted"></span>
-            </div>
-            <div class="timer-compact">
-              <div class="timer-compact-display" id="timer-display">00:00</div>
-              <div class="muted small" id="timer-status">Ready to start</div>
-              <div class="timer-progress"><div class="timer-progress-fill" id="timer-progress-fill"></div></div>
-            </div>
-            <div class="crunch-actions crunch-actions-compact">
-              <button class="btn-outline" id="btn-pause">▶ Start</button>
-              <button class="btn-icon" id="btn-reset-timer" title="Reset timer">↺</button>
-            </div>
-            <button class="btn-primary" id="btn-complete-task" style="width:100%; margin-top:14px;">✓ Complete task</button>
-
-            <div class="callout-card callout-green" style="margin-top:20px;">
-              <div class="callout-title">🌱 Progress, not perfection.</div>
-              <p class="muted">If you don't finish, that's useful information. We'll adjust the plan.</p>
-            </div>
-          </aside>
-        </div>
-      </section>
-
-      <!-- ---- Check-in ---- -->
-      <section id="panel-checkin" class="panel">
-        <div class="panel-header">
-          <div class="eyebrow">SESSION CHECK-IN</div>
-          <h2>Update the plan honestly</h2>
-        </div>
-        <div class="panel-body two-col">
-          <div class="card main-card center-card">
-            <div class="checkin-flag">⚑</div>
-            <h2>How did that focus block go?</h2>
-            <p class="muted">No judgment—your answer helps CrunchAI make the next step more realistic.</p>
-
-            <div class="checkin-options" id="checkin-options">
-              <button class="checkin-option" data-status="completed">
-                <span class="checkin-icon">✓</span><strong>Completed</strong><div class="muted small">I finished the full task</div>
+            <div class="form-foot">
+              <span class="form-note">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                Only used to build this plan
+              </span>
+              <button type="submit" class="btn btn-primary btn-lg" id="btn-analyze" data-magnetic>
+                <span class="btn-label">Get my plan</span>
+                <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
-              <button class="checkin-option active" data-status="partial">
-                <span class="checkin-icon">◐</span><strong>Partially completed</strong><div class="muted small">I made meaningful progress</div>
+            </div>
+          </form>
+        </div>
+
+        <aside class="scene-aside" data-stagger>
+          <div class="aside-card surface">
+            <p class="aside-title">What happens next</p>
+            <ol class="next-steps">
+              <li><span class="ns-num">1</span><div><strong>We sort it</strong><p>By deadline, impact, and the time you actually have.</p></div></li>
+              <li><span class="ns-num">2</span><div><strong>You start small</strong><p>Your first task takes 5 to 10 minutes. Easy to begin.</p></div></li>
+              <li><span class="ns-num">3</span><div><strong>It adapts</strong><p>Check in after each block and the plan rebuilds around what happened.</p></div></li>
+            </ol>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ 2 Plan ============ -->
+    <section class="scene" data-scene="plan" aria-labelledby="plan-title" hidden>
+      <div class="scene-inner two-col">
+        <div class="scene-main">
+          <div class="scene-meta" data-stagger>
+            <p class="eyebrow">Step 2 of 5 &middot; Your plan</p>
+            <span class="pill" id="plan-urgency"><span class="dot"></span><span class="pill-text"></span></span>
+          </div>
+          <h1 class="display scene-title" id="plan-title" tabindex="-1" data-stagger>Here's your <em>way out.</em></h1>
+          <p class="plan-summary" id="plan-summary" data-stagger></p>
+
+          <article class="next-move surface" data-stagger>
+            <div class="next-move-top">
+              <p class="next-move-label">Do this first</p>
+              <span class="badge" id="plan-starter" hidden></span>
+            </div>
+            <h2 class="next-move-title" id="plan-next-title"></h2>
+            <div class="next-move-foot">
+              <span class="next-move-time">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                <span id="plan-next-time"></span>
+              </span>
+              <button type="button" class="btn btn-primary" id="btn-enter-crunch" data-magnetic>
+                <span class="btn-label">Start this task</span>
+                <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
               </button>
-              <button class="checkin-option" data-status="skipped">
-                <span class="checkin-icon">✕</span><strong>Not completed</strong><div class="muted small">I couldn't make progress</div>
+            </div>
+          </article>
+
+          <div class="queue-wrap" data-stagger>
+            <p class="queue-label">Then</p>
+            <ol class="queue" id="plan-queue"></ol>
+          </div>
+        </div>
+
+        <aside class="scene-aside" data-stagger>
+          <div class="aside-card surface">
+            <p class="aside-title">At a glance</p>
+            <dl class="glance">
+              <div><dt>Planned</dt><dd class="num" id="glance-minutes">0m</dd></div>
+              <div><dt>Tasks</dt><dd class="num" id="glance-tasks">0</dd></div>
+              <div><dt>Urgency</dt><dd id="glance-urgency">None</dd></div>
+            </dl>
+            <div class="time-bar" id="glance-bar" aria-hidden="true"></div>
+            <p class="muted small">Each segment is one task's share of your time, in order.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ 3 Crunch ============ -->
+    <section class="scene" data-scene="crunch" aria-labelledby="crunch-title" hidden>
+      <div class="scene-inner two-col crunch-grid">
+        <div class="scene-main">
+          <div class="scene-meta" data-stagger>
+            <p class="eyebrow" id="crunch-index">Step 3 of 5 &middot; Crunch</p>
+            <span class="pill" id="crunch-urgency"><span class="dot"></span><span class="pill-text"></span></span>
+          </div>
+          <h1 class="display scene-title crunch-title" id="crunch-title" tabindex="-1" data-stagger></h1>
+
+          <div class="chat surface" data-stagger>
+            <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Study helper conversation"></div>
+            <form class="chat-form" id="chat-form">
+              <label class="sr-only" for="chat-input">Ask the study helper</label>
+              <textarea id="chat-input" rows="1" placeholder="Ask about this task. Explain it, quiz me, check my reasoning."></textarea>
+              <button type="submit" class="chat-send" id="btn-send" aria-label="Send question">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <aside class="scene-aside" data-stagger>
+          <div class="aside-card surface timer-card">
+            <div class="aside-head">
+              <p class="aside-title">Focus timer</p>
+              <span class="muted small num" id="timer-block"></span>
+            </div>
+
+            <div class="commit" id="commit-edit">
+              <label class="field-label" for="commitment">By the end of this block I will...</label>
+              <input type="text" id="commitment" maxlength="140" placeholder="e.g. explain glycolysis without my notes" />
+            </div>
+            <p class="goal" id="goal-display" hidden><span>Goal</span><strong id="goal-text"></strong></p>
+
+            <div class="timer">
+              <svg class="timer-ring" viewBox="0 0 200 200" aria-hidden="true">
+                <circle class="ring-track" cx="100" cy="100" r="90"/>
+                <circle class="timer-progress" id="timer-progress" cx="100" cy="100" r="90"/>
+              </svg>
+              <div class="timer-center">
+                <span class="timer-display num" id="timer-display" role="timer">00:00</span>
+                <span class="muted small" id="timer-status" aria-live="polite">Ready when you are</span>
+              </div>
+            </div>
+
+            <div class="timer-controls">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-timer-toggle">
+                <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg>
+                <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true" hidden><path fill="currentColor" d="M7.5 5h3v14h-3zM13.5 5h3v14h-3z"/></svg>
+                <span class="btn-label">Start</span>
+              </button>
+              <button type="button" class="icon-btn" id="btn-timer-reset" aria-label="Reset timer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+              </button>
+              <button type="button" class="icon-btn" id="btn-fullscreen" aria-label="Enter full screen" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
               </button>
             </div>
 
-            <label class="field-label">What did you cover? <span class="optional-tag">Optional, not sent to AI yet</span></label>
-            <textarea id="checkin-notes" placeholder="e.g. Finished glycolysis and the Krebs cycle..."></textarea>
+            <p class="away-note" id="away-note" role="status" hidden></p>
+            <p class="focus-stats muted small num" id="focus-stats" hidden></p>
 
-            <div class="submit-row">
-              <button class="link-btn-plain" id="btn-skip-details">Skip details</button>
-              <button class="btn-primary" id="btn-update-plan">✦ Update my plan</button>
+            <div class="focus-options">
+              <label class="switch">
+                <span>
+                  <strong>Focus lock</strong>
+                  <span class="switch-help">Only count time on this tab. Leave it off if you need another tab for notes.</span>
+                </span>
+                <input type="checkbox" id="pref-focus-lock" />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+              <label class="switch">
+                <span>
+                  <strong>Countdown in tab title</strong>
+                  <span class="switch-help">See the time left from any other tab.</span>
+                </span>
+                <input type="checkbox" id="pref-tab-title" />
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
             </div>
           </div>
 
-          <aside class="side-card side-card-dark">
-            <div class="side-card-head">
-              <h4>✦ Automatic replanning</h4>
-              <span class="pill pill-live">LIVE</span>
+          <div class="aside-card surface topic-card">
+            <label class="aside-title" for="topic-select">Topic notes</label>
+            <div class="select-wrap">
+              <select id="topic-select"><option value="">No topic selected</option></select>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
             </div>
-            <div class="replan-row">✓ <div><strong>Preserve progress</strong><div class="muted small">Completed work stays checked off</div></div></div>
-            <div class="replan-row">↓ <div><strong>Move unfinished work</strong><div class="muted small">Remaining task becomes next</div></div></div>
-            <div class="replan-row">🛡 <div><strong>Protect the buffer</strong><div class="muted small">Remaining time reallocated</div></div></div>
-          </aside>
-        </div>
-      </section>
-
-      <!-- ---- Progress ---- -->
-      <section id="panel-progress" class="panel">
-        <div class="panel-header">
-          <div class="eyebrow">PLAN REVISED</div>
-          <h2>You're still on track</h2>
-        </div>
-        <div class="panel-body two-col">
-          <div class="col-main">
-            <div class="banner-success" id="progress-banner">Plan updated from your session.</div>
-
-            <div class="hero-task hero-task-cool" id="revised-hero" style="display:none;">
-              <div class="hero-task-top"><span>➹ REVISED NEXT TASK</span><span class="tag tag-urgent" id="revised-badge">URGENT</span></div>
-              <h3 id="revised-title">—</h3>
-              <p class="muted" id="revised-desc"></p>
-              <div class="hero-task-bottom">
-                <span class="hero-time" id="revised-time">-- min</span>
-                <button class="btn-white" id="btn-start-next-block">Start next block →</button>
+            <p class="muted small">The study helper and the quiz use the selected topic's notes.</p>
+            <button type="button" class="text-btn" id="btn-topic-toggle" aria-expanded="false" aria-controls="topic-form">Add a topic</button>
+            <form class="topic-form" id="topic-form" hidden>
+              <div class="field">
+                <label class="field-label" for="topic-name">Topic name</label>
+                <input type="text" id="topic-name" placeholder="e.g. Biology 201" />
               </div>
-            </div>
-
-            <div class="empty-state" id="progress-empty" style="display:none;">
-              <h3>🎉 Plan complete</h3>
-              <p class="muted">Every task in this plan has been addressed. Nice work.</p>
-            </div>
-
-            <h4 class="after-that-label">Updated queue</h4>
-            <div id="progress-queue-list"></div>
+              <div class="field">
+                <label class="field-label" for="topic-notes">Notes <span class="optional">Optional</span></label>
+                <textarea id="topic-notes" rows="4" placeholder="Paste notes you want the AI to use."></textarea>
+              </div>
+              <p class="form-error" id="topic-error" role="alert" hidden></p>
+              <button type="submit" class="btn btn-ghost btn-sm" id="btn-topic-save"><span class="btn-label">Save topic</span></button>
+            </form>
           </div>
 
-          <aside class="side-card">
-            <div class="side-card-head"><h4>Today</h4><span id="progress-percent">0%</span></div>
-            <div class="progress-bar"><div class="progress-bar-fill" id="progress-bar-fill"></div></div>
-            <div class="stat-row">
-              <div><strong id="stat-minutes">0m</strong><div class="muted small">focused</div></div>
-              <div><strong id="stat-topics">0</strong><div class="muted small">topics covered</div></div>
-              <div><strong id="stat-replans">0</strong><div class="muted small">replan</div></div>
+          <button type="button" class="btn btn-ghost btn-lg complete-btn" id="btn-complete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+            <span class="btn-label">I'm done with this block</span>
+          </button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============ 4 Check-in ============ -->
+    <section class="scene" data-scene="checkin" aria-labelledby="checkin-title" hidden>
+      <div class="scene-inner narrow">
+        <p class="eyebrow" data-stagger>Step 4 of 5 &middot; Check-in</p>
+        <h1 class="display scene-title" id="checkin-title" tabindex="-1" data-stagger>How did that <em>block</em> go?</h1>
+        <p class="lead" data-stagger>Be honest. The plan only works if it knows what really happened.</p>
+        <p class="checkin-goal" id="checkin-goal" data-stagger hidden>You said you'd <strong id="checkin-goal-text"></strong></p>
+
+        <section class="quiz surface" id="quiz" aria-labelledby="quiz-title" data-stagger>
+          <div class="quiz-head">
+            <div>
+              <h2 class="quiz-title" id="quiz-title">Prove it <span class="optional">Optional</span></h2>
+              <p class="muted small" id="quiz-intro">Answer 3 quick questions about this task. We'll suggest how it went.</p>
             </div>
-            <div class="side-card-head" style="margin-top:24px;">
-              <h4>Recent activity</h4>
-              <span class="mock-badge" title="This session only — nothing persists across reloads">SESSION ONLY</span>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-quiz"><span class="btn-label">Quiz me</span></button>
+          </div>
+          <ol class="quiz-list" id="quiz-list" hidden></ol>
+          <p class="form-error" id="quiz-error" role="alert" hidden></p>
+          <div class="quiz-foot" id="quiz-foot" hidden>
+            <button type="button" class="text-btn" id="btn-quiz-skip">Skip the quiz</button>
+            <button type="button" class="btn btn-primary btn-sm" id="btn-quiz-grade"><span class="btn-label">Check my answers</span></button>
+          </div>
+          <p class="quiz-summary" id="quiz-summary" role="status" hidden></p>
+        </section>
+
+        <form id="checkin-form" data-stagger>
+          <fieldset class="options">
+            <legend class="options-legend">How did it go?</legend>
+            <label class="option">
+              <input type="radio" name="outcome" value="completed" />
+              <span class="option-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+              <strong>Done</strong>
+              <span class="muted small">I finished the whole task</span>
+            </label>
+            <label class="option">
+              <input type="radio" name="outcome" value="partial" checked />
+              <span class="option-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="7.5"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15z" fill="currentColor"/></svg></span>
+              <strong>Partly done</strong>
+              <span class="muted small">I made real progress</span>
+            </label>
+            <label class="option">
+              <input type="radio" name="outcome" value="skipped" />
+              <span class="option-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></span>
+              <strong>Didn't happen</strong>
+              <span class="muted small">I couldn't get into it</span>
+            </label>
+          </fieldset>
+
+          <p class="checkin-time" id="checkin-time"></p>
+          <p class="form-error" id="checkin-error" role="alert" hidden></p>
+
+          <div class="form-foot">
+            <button type="button" class="btn btn-ghost" id="btn-back-crunch">Back to the timer</button>
+            <button type="submit" class="btn btn-primary" id="btn-update-plan" data-magnetic>
+              <span class="btn-label">Update my plan</span>
+              <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- ============ 5 Progress ============ -->
+    <section class="scene" data-scene="progress" aria-labelledby="progress-title" hidden>
+      <div class="scene-inner two-col">
+        <div class="scene-main">
+          <p class="eyebrow" data-stagger>Step 5 of 5 &middot; Progress</p>
+          <h1 class="display scene-title" id="progress-title" tabindex="-1" data-stagger></h1>
+          <p class="plan-summary" id="progress-banner" data-stagger></p>
+
+          <article class="next-move surface" id="progress-next" data-stagger>
+            <div class="next-move-top">
+              <p class="next-move-label">Do this next</p>
+              <span class="badge" id="progress-starter" hidden></span>
             </div>
-            <div id="activity-list"></div>
-          </aside>
+            <h2 class="next-move-title" id="progress-next-title"></h2>
+            <div class="next-move-foot">
+              <span class="next-move-time">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                <span id="progress-next-time"></span>
+              </span>
+              <button type="button" class="btn btn-primary" id="btn-next-block" data-magnetic>
+                <span class="btn-label">Start next block</span>
+                <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </button>
+            </div>
+          </article>
+
+          <div class="complete-state" id="progress-complete" data-stagger hidden>
+            <button type="button" class="btn btn-primary" id="btn-new-plan">
+              <span class="btn-label">Start a new plan</span>
+              <svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+
+          <div class="queue-wrap" id="progress-queue-wrap" data-stagger>
+            <p class="queue-label">Then</p>
+            <ol class="queue" id="progress-queue"></ol>
+          </div>
         </div>
-      </section>
 
-    </main>
-  </section>
+        <aside class="scene-aside" data-stagger>
+          <div class="aside-card surface">
+            <div class="aside-head">
+              <p class="aside-title">This plan</p>
+              <span class="stat-pct num" id="stat-pct">0%</span>
+            </div>
+            <div class="meter" aria-hidden="true"><span class="meter-fill" id="stat-meter"></span></div>
+            <dl class="glance">
+              <div><dt>Focused</dt><dd class="num" id="stat-minutes">0m</dd></div>
+              <div><dt>Done</dt><dd class="num" id="stat-addressed">0</dd></div>
+              <div><dt>Replans</dt><dd class="num" id="stat-replans">0</dd></div>
+            </dl>
+          </div>
+          <div class="aside-card surface">
+            <p class="aside-title">Recent blocks</p>
+            <ol class="activity" id="activity"></ol>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
 
-  <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="js/core.js"></script>
+  <script src="js/app.js"></script>
 </body>
 </html>

@@ -5,16 +5,18 @@ Purpose:
     The FastAPI app itself. This is the glue layer: routes accept requests
     validated by models.py, call planner.py to think, and call db.py to
     persist/read state. Contains no Gemini logic and no raw SQL of its own.
-    Also owns /topics (subject + optional AI context notes) and /ask (the
-    Crunch Mode study-helper chat).
+    Also owns /topics (subject + optional AI context notes), /ask (the
+    Crunch Mode study-helper chat), and /quiz + /quiz/grade (the
+    end-of-block recall check).
 
     The frontend (app/static/) is mounted at the bottom of this file, after
     every API route, so it never shadows /situation, /plan, /tasks/{id},
-    /topics, or /ask.
+    /topics, /ask, or /quiz.
 
 Interacts with:
     - models.py    -> request bodies and response_models on every route
-    - planner.py   -> generate_plan() / replan() / answer_question()
+    - planner.py   -> generate_plan() / replan() / answer_question() /
+                      generate_quiz() / grade_quiz()
     - db.py        -> create_plan / create_task / get_latest_plan /
                       get_pending_tasks_for_plan / update_task_status /
                       mark_tasks_replaced / update_plan_meta / create_session /
@@ -29,6 +31,7 @@ from app import db, planner
 from app.models import (
     SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut,
     TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse,
+    QuizRequest, Quiz, QuizGradeRequest, QuizGrade,
 )
 
 app = FastAPI(title="CrunchAI")
@@ -95,6 +98,10 @@ def update_task(task_id: int, update: TaskUpdate):
             "title": task_row["title"],
             "status": update.status.value,
             "actual_minutes": update.actual_minutes,
+            "commitment": update.commitment,
+            "away_minutes": update.away_minutes,
+            "quiz_correct": update.quiz_correct,
+            "quiz_total": update.quiz_total,
         },
         minutes_left=minutes_left,
     )
@@ -156,6 +163,26 @@ def ask_study_helper(request: AskRequest):
     history = [{"role": m.role, "content": m.content} for m in request.history]
     answer = planner.answer_question(task, topic, request.question, history)
     return AskResponse(answer=answer)
+
+
+# ---- Prove-it quiz (recall check at the end of a focus block) ----
+
+@app.post("/quiz", response_model=Quiz)
+def create_quiz(request: QuizRequest):
+    task = db.get_task(request.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    topic = db.get_topic(request.topic_id) if request.topic_id else None
+    return planner.generate_quiz(task, topic, request.commitment)
+
+
+@app.post("/quiz/grade", response_model=QuizGrade)
+def grade_quiz(request: QuizGradeRequest):
+    task = db.get_task(request.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    topic = db.get_topic(request.topic_id) if request.topic_id else None
+    return planner.grade_quiz(task, topic, request.questions, request.answers)
 
 
 # Serve the frontend last, so it doesn't shadow the API routes above.

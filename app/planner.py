@@ -2,21 +2,21 @@
 planner.py
 
 Purpose:
-    The "brain" of CrunchAI. Owns the Gemini API call, prompt text, and
-    three things: turning a situation into a plan (generate_plan), revising
-    a plan after progress (replan), and the Crunch Mode study chat
-    (answer_question) — a NotebookLM-style "answer grounded in this
-    context" Q&A, minus file uploads for now. Intentionally knows nothing
-    about FastAPI or SQLite — it takes plain data in and returns validated
-    Pydantic models (or plain text, for chat) out, so it can be tested and
-    reused on its own.
+    The "brain" of CrunchAI. Owns the Gemini API call, prompt text, and:
+    turning a situation into a plan (generate_plan), revising a plan after
+    progress (replan), the Crunch Mode study chat (answer_question), and the
+    end-of-block recall check (generate_quiz / grade_quiz). Intentionally
+    knows nothing about FastAPI or SQLite: it takes plain data in and
+    returns validated Pydantic models (or plain text, for chat) out, so it
+    can be tested and reused on its own.
 
 Interacts with:
-    - models.py    -> validates Gemini's raw JSON against PlanOutput for
-                      generate_plan()/replan(); answer_question() returns
-                      plain text instead, wrapped in AskResponse by main.py
-    - main.py      -> routes call generate_plan() / replan() / answer_question(),
-                      then hand results to db.py to persist
+    - models.py    -> validates Gemini's raw JSON against PlanOutput,
+                      Quiz, and QuizGrade; answer_question() returns plain
+                      text instead, wrapped in AskResponse by main.py
+    - main.py      -> routes call generate_plan() / replan() / answer_question() /
+                      generate_quiz() / grade_quiz(), then hand results to
+                      db.py to persist where needed
     - db.py        -> NOT imported here on purpose; main.py is the glue
                       between planner output and storage
 
@@ -29,7 +29,7 @@ import json
 from dotenv import load_dotenv
 from google import genai
 
-from app.models import PlanOutput
+from app.models import PlanOutput, Quiz, QuizGrade
 
 load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
@@ -52,6 +52,9 @@ Return ONLY valid JSON (no markdown, no commentary) matching this shape:
 }}
 
 The tasks must add up to no more than {minutes} minutes total.
+The first task must be a small starter that takes 5 to 10 minutes and can be
+started immediately, because starting is the hardest part for this student.
+Do not use em dashes in any text.
 """
 
 
@@ -61,7 +64,7 @@ what's still left.
 
 Last task attempted: {last_task_title}
 Outcome: {last_status} (actual time spent: {actual_minutes} minutes)
-
+{block_context}
 Remaining tasks the student has not done yet:
 {remaining_tasks_list}
 
@@ -82,7 +85,33 @@ Return ONLY valid JSON (no markdown, no commentary) matching this shape:
 }}
 
 The tasks must add up to no more than {minutes_left} minutes total.
+If the last task was skipped, make the next task a small starter that takes
+5 to 10 minutes, so the student can get moving again.
+Do not use em dashes in any text.
 """
+
+
+def _block_context(last_update: dict) -> str:
+    """Optional evidence about how the last focus block really went."""
+    lines = []
+    if last_update.get("commitment"):
+        lines.append(f"Their goal for that block was: {last_update['commitment']}")
+    if last_update.get("quiz_total"):
+        lines.append(
+            f"Recall check afterwards: {last_update.get('quiz_correct', 0)} of "
+            f"{last_update['quiz_total']} questions answered correctly."
+        )
+    if last_update.get("away_minutes"):
+        lines.append(f"They spent {last_update['away_minutes']} minutes off the page during the block.")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
+def _topic_context(topic: dict | None) -> str:
+    if topic and topic.get("notes"):
+        return f"\nContext notes for {topic['name']}:\n{topic['notes']}\n"
+    if topic:
+        return f"\nTopic: {topic['name']} (no additional notes provided)\n"
+    return ""
 
 
 def _strip_code_fences(text: str) -> str:
@@ -116,7 +145,8 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
 
     remaining_tasks: list of dicts with at least 'title' and 'duration_minutes'
     last_update: dict with 'title', 'status', 'actual_minutes' for the task
-                 that was just marked done/partial/skipped
+                 that was just marked done/partial/skipped, plus optional
+                 'commitment', 'away_minutes', 'quiz_correct', 'quiz_total'
     """
     remaining_list_str = "\n".join(
         f"- {t['title']} (~{t['duration_minutes']} min)" for t in remaining_tasks
@@ -126,6 +156,7 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
         last_task_title=last_update.get("title", "unknown task"),
         last_status=last_update.get("status", "unknown"),
         actual_minutes=last_update.get("actual_minutes", "unknown"),
+        block_context=_block_context(last_update),
         remaining_tasks_list=remaining_list_str,
         minutes_left=minutes_left,
     )
@@ -134,10 +165,11 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
 
 
 ASK_SYSTEM_PROMPT = """You are CrunchAI's study helper, active during a focused study session.
-Your job is to help the student understand and work through their material right now —
+Your job is to help the student understand and work through their material right now:
 explain concepts, quiz them, check their reasoning, and answer questions directly.
 Keep answers focused and study-session appropriate: clear, not overly long, and oriented
-toward helping them actually learn this before their deadline — not a generic essay.
+toward helping them actually learn this before their deadline, not a generic essay.
+Do not use em dashes.
 
 Current task: {task_title}
 {topic_context}
@@ -156,15 +188,9 @@ def answer_question(task: dict, topic: dict | None, question: str, history: list
     question: the student's latest message
     history: prior turns in this chat, as [{"role": "user"/"assistant", "content": ...}, ...]
     """
-    topic_context = ""
-    if topic and topic.get("notes"):
-        topic_context = f"\nContext notes for {topic['name']}:\n{topic['notes']}\n"
-    elif topic:
-        topic_context = f"\nTopic: {topic['name']} (no additional notes provided)\n"
-
     system_prompt = ASK_SYSTEM_PROMPT.format(
         task_title=task.get("title", "Unknown task"),
-        topic_context=topic_context,
+        topic_context=_topic_context(topic),
     )
 
     # Fold history + the new question into one prompt. This is plain text,
@@ -180,6 +206,68 @@ def answer_question(task: dict, topic: dict | None, question: str, history: list
     prompt = "\n".join(convo_lines)
     response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
     return response.text.strip()
+
+
+QUIZ_PROMPT_TEMPLATE = """You are CrunchAI's study helper. The student just finished a focus
+block and wants to check what they actually learned.
+
+Task they worked on: {task_title}
+{goal_line}{topic_context}
+Write exactly 3 short recall questions they could answer from memory in one or
+two sentences each. Test understanding of the task's material, not trivia.
+Do not include answers. Do not use em dashes.
+
+Return ONLY valid JSON (no markdown, no commentary) matching this shape:
+{{"questions": ["...", "...", "..."]}}
+"""
+
+
+GRADE_PROMPT_TEMPLATE = """You are CrunchAI's study helper, grading a quick recall check.
+Be encouraging but honest: a vague, off-topic, or empty answer is not correct.
+
+Task the student worked on: {task_title}
+{topic_context}
+{qa_block}
+
+Grade each answer as "correct", "partial", or "wrong", with one short sentence of
+feedback naming what was right or what was missing. Then give an overall verdict:
+"completed" if the answers show they covered the task, "partial" if they covered
+some of it, "skipped" if they show little or no progress. Do not use em dashes.
+
+Return ONLY valid JSON (no markdown, no commentary) matching this shape:
+{{
+  "results": [{{"grade": "correct" | "partial" | "wrong", "feedback": "..."}}],
+  "verdict": "completed" | "partial" | "skipped",
+  "summary": "one short sentence for the student"
+}}
+The results list must have exactly {count} items, in the same order as the questions.
+"""
+
+
+def generate_quiz(task: dict, topic: dict | None, commitment: str | None = None) -> Quiz:
+    """Three recall questions about the task the student just worked on."""
+    goal_line = f"Their goal for the block was: {commitment}\n" if commitment else ""
+    prompt = QUIZ_PROMPT_TEMPLATE.format(
+        task_title=task.get("title", "Unknown task"),
+        goal_line=goal_line,
+        topic_context=_topic_context(topic),
+    )
+    return Quiz.model_validate(_call_gemini(prompt))
+
+
+def grade_quiz(task: dict, topic: dict | None, questions: list[str], answers: list[str]) -> QuizGrade:
+    """Grade the student's recall answers and suggest how the block went."""
+    qa_block = "\n".join(
+        f"Q{i}: {q}\nA{i}: {(answers[i - 1].strip() if i <= len(answers) else '') or '(no answer)'}"
+        for i, q in enumerate(questions, start=1)
+    )
+    prompt = GRADE_PROMPT_TEMPLATE.format(
+        task_title=task.get("title", "Unknown task"),
+        topic_context=_topic_context(topic),
+        qa_block=qa_block,
+        count=len(questions),
+    )
+    return QuizGrade.model_validate(_call_gemini(prompt))
 
 
 if __name__ == "__main__":

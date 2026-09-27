@@ -8,7 +8,8 @@ Purpose:
     exactly one definition of "what a plan looks like."
 
 Interacts with:
-    - planner.py   -> validates Gemini's raw JSON response against PlanOutput
+    - planner.py   -> validates Gemini's raw JSON response against PlanOutput,
+                      Quiz, and QuizGrade
     - main.py      -> used as request bodies / response_models on routes
     - db.py        -> rows are converted to/from these models when
                       reading/writing tasks, plans, and sessions
@@ -45,6 +46,10 @@ class SituationInput(BaseModel):
 class TaskUpdate(BaseModel):
     status: TaskStatus
     actual_minutes: Optional[int] = None
+    commitment: Optional[str] = Field(None, description="What the student said they'd get done this block")
+    away_minutes: Optional[int] = Field(None, ge=0, description="Minutes spent off the tab while focus lock was on")
+    quiz_correct: Optional[int] = Field(None, ge=0)
+    quiz_total: Optional[int] = Field(None, ge=0)
 
 
 # ---- Produced by planner.py (and validated against Gemini's output) ----
@@ -108,3 +113,45 @@ class AskRequest(BaseModel):
 
 class AskResponse(BaseModel):
     answer: str
+
+
+# ---- Prove-it quiz (recall check at the end of a focus block) ----
+
+class QuizRequest(BaseModel):
+    task_id: int
+    topic_id: Optional[int] = None
+    commitment: Optional[str] = None
+
+
+class Quiz(BaseModel):
+    questions: list[str] = Field(..., min_length=1, max_length=5)
+
+
+class QuizGradeRequest(BaseModel):
+    task_id: int
+    topic_id: Optional[int] = None
+    questions: list[str] = Field(..., min_length=1, max_length=5)
+    answers: list[str]
+
+
+class Grade(str, Enum):
+    CORRECT = "correct"
+    PARTIAL = "partial"
+    WRONG = "wrong"
+
+
+class Verdict(str, Enum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    SKIPPED = "skipped"
+
+
+class QuestionGrade(BaseModel):
+    grade: Grade
+    feedback: str
+
+
+class QuizGrade(BaseModel):
+    results: list[QuestionGrade]
+    verdict: Verdict
+    summary: str
