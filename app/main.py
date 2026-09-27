@@ -152,8 +152,7 @@ def ask_study_helper(request: AskRequest):
         raise HTTPException(status_code=404, detail="Task not found")
 
     topic = db.get_topic(request.topic_id) if request.topic_id else None
-
-       history = [{"role": m.role, "content": m.content} for m in request.history]
+    history = [{"role": m.role, "content": m.content} for m in request.history]
     answer = planner.answer_question(task, topic, request.question, history)
 
     # Persist this turn so it survives a refresh and can be replayed via
@@ -162,6 +161,14 @@ def ask_study_helper(request: AskRequest):
     db.create_prompt(request.task_id, request.topic_id, request.question, answer)
 
     return AskResponse(answer=answer)
+
+
+@app.get("/tasks/{task_id}/prompts", response_model=list[PromptOut])
+def get_task_prompts(task_id: int):
+    """Full Q&A history for a task, so the frontend can rehydrate a chat on load."""
+    if not db.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return [PromptOut(**p) for p in db.get_prompts_for_task(task_id)]
 
 
 @app.get("/tasks/{task_id}/prompts", response_model=list[PromptOut])
