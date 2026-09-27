@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from app import db, planner
 from app.models import (
     SituationInput, TaskUpdate, TaskStatus, PlanOut, TaskOut,
-    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse,
+    TopicCreate, TopicUpdate, Topic, AskRequest, AskResponse, PromptOut,
 )
 
 app = FastAPI(title="CrunchAI")
@@ -153,9 +153,23 @@ def ask_study_helper(request: AskRequest):
 
     topic = db.get_topic(request.topic_id) if request.topic_id else None
 
-    history = [{"role": m.role, "content": m.content} for m in request.history]
+       history = [{"role": m.role, "content": m.content} for m in request.history]
     answer = planner.answer_question(task, topic, request.question, history)
+
+    # Persist this turn so it survives a refresh and can be replayed via
+    # GET /tasks/{task_id}/prompts, instead of living only in the
+    # client-held `history` the frontend re-sends each time.
+    db.create_prompt(request.task_id, request.topic_id, request.question, answer)
+
     return AskResponse(answer=answer)
+
+
+@app.get("/tasks/{task_id}/prompts", response_model=list[PromptOut])
+def get_task_prompts(task_id: int):
+    """Full Q&A history for a task, so the frontend can rehydrate a chat on load."""
+    if not db.get_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return [PromptOut(**p) for p in db.get_prompts_for_task(task_id)]
 
 
 # Serve the frontend last, so it doesn't shadow the API routes above.
