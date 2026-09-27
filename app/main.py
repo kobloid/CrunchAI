@@ -24,10 +24,14 @@ Interacts with:
     - app/static/  -> index.html (landing) / app.html (the app) / style.css / app.js
 """
 import hashlib
+import json
 import secrets
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from google.genai import errors as genai_errors
+from pydantic import ValidationError
 
 from app import db, planner
 from app.models import (
@@ -42,6 +46,17 @@ app = FastAPI(title="CrunchAI")
 @app.on_event("startup")
 def on_startup():
     db.init_db()
+
+
+@app.exception_handler(genai_errors.APIError)
+def ai_unavailable(request: Request, exc: genai_errors.APIError):
+    return JSONResponse(status_code=503, content={"detail": "The AI is busy right now. Try again in a few seconds."})
+
+
+@app.exception_handler(json.JSONDecodeError)
+@app.exception_handler(ValidationError)
+def ai_bad_output(request: Request, exc: Exception):
+    return JSONResponse(status_code=502, content={"detail": "The AI sent back something unexpected. Try again."})
 
 
 @app.post("/situation", response_model=PlanOut)
@@ -198,12 +213,6 @@ def get_task_prompts(task_id: int):
     if not db.get_task(task_id):
         raise HTTPException(status_code=404, detail="Task not found")
     return [PromptOut(**p) for p in db.get_prompts_for_task(task_id)]
-
-
-@app.post("/users", response_model=UserOut)
-def create_user(user: UserCreate):
-    user_id = db.create_user(user.username, user.password, user.email)
-    return UserOut(id=user_id, username=user.username, email=user.email)
 
 
 @app.post("/signup", response_model=UserOut)

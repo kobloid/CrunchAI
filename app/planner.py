@@ -28,9 +28,11 @@ against a hardcoded situation before wiring it into FastAPI.
 
 import os
 import json
+import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 
 from app.models import PlanOutput, Quiz, QuizGrade
 
@@ -38,6 +40,8 @@ load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MODEL_NAME = "gemini-3.8-flash"
+FALLBACK_MODEL = "gemini-3.1-flash-lite"
+RETRYABLE_STATUS = {429, 500, 503}
 
 TASK_SCHEMA_HINT = """{{
       "title": "...",
@@ -180,11 +184,27 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
+def _generate(prompt: str) -> str:
+    """
+    Get text from Gemini. The primary model returns 503 "high demand" at
+    busy times, so retry briefly, then fall back to a lighter model.
+    """
+    last_error = None
+    for model in (MODEL_NAME, FALLBACK_MODEL):
+        for attempt in range(2):
+            try:
+                return client.models.generate_content(model=model, contents=prompt).text
+            except genai_errors.APIError as err:
+                if err.code not in RETRYABLE_STATUS:
+                    raise
+                last_error = err
+                time.sleep(1 + attempt)
+    raise last_error
+
+
 def _call_gemini(prompt: str) -> dict:
     """Send a prompt to Gemini and parse the response as JSON."""
-    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-    cleaned = _strip_code_fences(response.text)
-    return json.loads(cleaned)
+    return json.loads(_strip_code_fences(_generate(prompt)))
 
 
 def generate_plan(situation: str, available_minutes: int) -> PlanOutput:
@@ -274,8 +294,7 @@ def answer_question(task: dict, topic: dict | None, question: str, history: list
     convo_lines.append("CrunchAI:")
 
     prompt = "\n".join(convo_lines)
-    response = client.models.generate_content(model=MODEL_NAME, contents=prompt)
-    return response.text.strip()
+    return _generate(prompt).strip()
 
 
 QUIZ_PROMPT_TEMPLATE = """You are CrunchAI's study helper. The student just finished a focus

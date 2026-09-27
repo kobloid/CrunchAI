@@ -108,9 +108,23 @@ def get_connection():
         conn.close()
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS never
+# alters an existing table, so older crunchai.db files need these added.
+MIGRATIONS = {
+    "plans": {"user_id": "INTEGER REFERENCES users (id)"},
+    "topics": {"user_id": "INTEGER REFERENCES users (id)"},
+    "tasks": {"deadline": "TEXT"},
+}
+
+
 def init_db():
     with get_connection() as conn:
         conn.executescript(SCHEMA_SQL)
+        for table, columns in MIGRATIONS.items():
+            existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, definition in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
 
 
 # ---- Plans ----
@@ -151,10 +165,10 @@ def get_plan(plan_id: int):
 
 # ---- Tasks ----
 
-def create_task(plan_id: int, title: str, subject: str, difficulty: int, duration_minutes: int, priority: int, deadline: str | None = None) -> int:
+def create_task(plan_id: int, title: str, duration_minutes: int, priority: int, deadline: str | None = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO tasks (plan_id, title, subject, difficulty, duration_minutes, priority, deadline)
+            """INSERT INTO tasks (plan_id, title, duration_minutes, priority, deadline)
                VALUES (?, ?, ?, ?, ?)""",
             (plan_id, title, duration_minutes, priority, deadline),
         )
