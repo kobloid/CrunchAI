@@ -58,6 +58,9 @@ class Task(BaseModel):
     title: str
     duration_minutes: int
     priority: int
+    deadline: Optional[str] = Field(
+        None, description="ISO 8601 datetime for the event this task is tied to (e.g. an exam), if one was stated or inferable. Null if no real deadline exists."
+    )
 
 
 class PlanOutput(BaseModel):

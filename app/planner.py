@@ -5,10 +5,12 @@ Purpose:
     The "brain" of CrunchAI. Owns the Gemini API call, prompt text, and:
     turning a situation into a plan (generate_plan), revising a plan after
     progress (replan), the Crunch Mode study chat (answer_question), and the
-    end-of-block recall check (generate_quiz / grade_quiz). Intentionally
-    knows nothing about FastAPI or SQLite: it takes plain data in and
-    returns validated Pydantic models (or plain text, for chat) out, so it
-    can be tested and reused on its own.
+    end-of-block recall check (generate_quiz / grade_quiz). Also computes real
+    time-until-deadline server-side (never trusting the model's own math for
+    that) and feeds it into replan/ask prompts so the AI reasons with
+    accurate urgency. Intentionally knows nothing about FastAPI or SQLite:
+    it takes plain data in and returns validated Pydantic models (or plain
+    text, for chat) out, so it can be tested and reused on its own.
 
 Interacts with:
     - models.py    -> validates Gemini's raw JSON against PlanOutput,
@@ -26,6 +28,7 @@ against a hardcoded situation before wiring it into FastAPI.
 
 import os
 import json
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google import genai
 
@@ -34,10 +37,18 @@ from app.models import PlanOutput, Quiz, QuizGrade
 load_dotenv()
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-MODEL_NAME = "gemini-3.1-flash-lite"
+MODEL_NAME = "gemini-3.8-flash"
+
+TASK_SCHEMA_HINT = """{{
+      "title": "...",
+      "duration_minutes": int, "priority": int,
+      "deadline": "2026-09-27T10:00:00" | null
+    }}"""
 
 PROMPT_TEMPLATE = """You are CrunchAI, an academic recovery assistant for a
 student who is behind and has limited time.
+
+Current date/time: {now_iso}
 
 Student's situation: {situation}
 Time available: {minutes} minutes
@@ -47,9 +58,15 @@ Return ONLY valid JSON (no markdown, no commentary) matching this shape:
   "urgency": "low" | "moderate" | "high" | "critical",
   "summary": "one or two sentence strategic summary",
   "tasks": [
-    {{"title": "...", "duration_minutes": int, "priority": int}}
+    """ + TASK_SCHEMA_HINT + """
   ]
 }}
+
+For "deadline": if the student mentions a specific event this task is tied
+to (an exam, a due date, a meeting), compute the actual ISO 8601 datetime
+for it relative to the current date/time above (e.g. "tomorrow at 10am" ->
+a real date this year). If no real deadline exists for a task, use null;
+do not invent one.
 
 The tasks must add up to no more than {minutes} minutes total.
 The first task must be a small starter that takes 5 to 10 minutes and can be
@@ -57,38 +74,77 @@ started immediately, because starting is the hardest part for this student.
 Do not use em dashes in any text.
 """
 
-
 REPLAN_PROMPT_TEMPLATE = """You are CrunchAI, an academic recovery assistant.
 The student was already working from a plan. Here is what just happened and
 what's still left.
 
+Current date/time: {now_iso}
+
 Last task attempted: {last_task_title}
 Outcome: {last_status} (actual time spent: {actual_minutes} minutes)
 {block_context}
-Remaining tasks the student has not done yet:
+Remaining tasks the student has not done yet (with real time left until each
+task's deadline, computed just now; treat this as accurate and prioritize
+accordingly):
 {remaining_tasks_list}
 
 Time remaining now: {minutes_left} minutes
 
 Given this, produce a REVISED plan for the remaining time. You may reorder,
-merge, shorten, drop, or replace the remaining tasks — whatever is most
-realistic given how the last task actually went. Do not just repeat the
-remaining tasks unchanged unless that's genuinely still the best plan.
+merge, shorten, drop, or replace the remaining tasks, whatever is most
+realistic given how the last task actually went and how close each deadline
+actually is. Do not just repeat the remaining tasks unchanged unless that's
+genuinely still the best plan.
 
 Return ONLY valid JSON (no markdown, no commentary) matching this shape:
 {{
   "urgency": "low" | "moderate" | "high" | "critical",
   "summary": "one or two sentence strategic summary of the revised plan",
   "tasks": [
-    {{"title": "...", "duration_minutes": int, "priority": int}}
+    """ + TASK_SCHEMA_HINT + """
   ]
 }}
 
-The tasks must add up to no more than {minutes_left} minutes total.
+Preserve each remaining task's original "deadline" value unless the revision
+genuinely changes what event it's tied to. The tasks must add up to no more
+than {minutes_left} minutes total.
 If the last task was skipped, make the next task a small starter that takes
 5 to 10 minutes, so the student can get moving again.
 Do not use em dashes in any text.
 """
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _time_until(deadline_iso: str | None) -> str:
+    """
+    Compute a human-readable time-remaining string from a stored ISO
+    deadline, using real server time, never the model's own math.
+    Returns 'no deadline set' if deadline_iso is None/unparseable, or
+    'overdue' if it's already passed.
+    """
+    if not deadline_iso:
+        return "no deadline set"
+    try:
+        deadline = datetime.fromisoformat(deadline_iso)
+    except ValueError:
+        return "no deadline set"
+
+    now = datetime.now(deadline.tzinfo) if deadline.tzinfo else datetime.now()
+    delta = deadline - now
+    total_seconds = delta.total_seconds()
+
+    if total_seconds <= 0:
+        return "overdue"
+
+    hours = total_seconds / 3600
+    if hours < 1:
+        return f"in {int(total_seconds // 60)} minutes"
+    if hours < 48:
+        return f"in {hours:.1f} hours"
+    return f"in {int(hours // 24)} days"
 
 
 def _block_context(last_update: dict) -> str:
@@ -133,7 +189,9 @@ def _call_gemini(prompt: str) -> dict:
 
 def generate_plan(situation: str, available_minutes: int) -> PlanOutput:
     """Turn a fresh situation description into a validated plan."""
-    prompt = PROMPT_TEMPLATE.format(situation=situation, minutes=available_minutes)
+    prompt = PROMPT_TEMPLATE.format(
+        now_iso=_now_iso(), situation=situation, minutes=available_minutes
+    )
     raw = _call_gemini(prompt)
     return PlanOutput.model_validate(raw)
 
@@ -143,16 +201,22 @@ def replan(remaining_tasks: list[dict], last_update: dict, minutes_left: int) ->
     Take the tasks that weren't finished plus how the last task actually
     went, and produce a revised plan for the remaining time.
 
-    remaining_tasks: list of dicts with at least 'title' and 'duration_minutes'
+    remaining_tasks: list of dicts with at least 'title', 'duration_minutes',
+                      and optionally 'deadline' (ISO string or None)
     last_update: dict with 'title', 'status', 'actual_minutes' for the task
                  that was just marked done/partial/skipped, plus optional
                  'commitment', 'away_minutes', 'quiz_correct', 'quiz_total'
     """
-    remaining_list_str = "\n".join(
-        f"- {t['title']} (~{t['duration_minutes']} min)" for t in remaining_tasks
-    ) or "(none — this was the last task)"
+    lines = []
+    for t in remaining_tasks:
+        deadline = t.get("deadline")
+        time_left = _time_until(deadline)
+        deadline_note = f", deadline: {deadline} ({time_left})" if deadline else ", no deadline"
+        lines.append(f"- {t['title']} (~{t['duration_minutes']} min){deadline_note}")
+    remaining_list_str = "\n".join(lines) or "(none, this was the last task)"
 
     prompt = REPLAN_PROMPT_TEMPLATE.format(
+        now_iso=_now_iso(),
         last_task_title=last_update.get("title", "unknown task"),
         last_status=last_update.get("status", "unknown"),
         actual_minutes=last_update.get("actual_minutes", "unknown"),
@@ -172,6 +236,7 @@ toward helping them actually learn this before their deadline, not a generic ess
 Do not use em dashes.
 
 Current task: {task_title}
+Deadline: {task_deadline} (time left: {time_left})
 {topic_context}
 """
 
@@ -179,17 +244,22 @@ Current task: {task_title}
 def answer_question(task: dict, topic: dict | None, question: str, history: list[dict]) -> str:
     """
     Answer a student's question during Crunch Mode, grounded in the current
-    task and (optionally) a topic's saved notes — the NotebookLM-style
-    "answer using this context" pattern, minus file uploads for now.
+    task (including real, server-computed time-until-deadline) and
+    optionally a topic's saved notes — the NotebookLM-style "answer using
+    this context" pattern, minus file uploads for now.
 
-    task: a task row/dict with at least 'title' and 'subject'
+    task: a task row/dict with at least 'title' and 'subject'; 'deadline'
+          (ISO string or None) is used to compute real urgency
     topic: a topic row/dict with 'name' and 'notes', or None if no topic
            was selected
     question: the student's latest message
     history: prior turns in this chat, as [{"role": "user"/"assistant", "content": ...}, ...]
     """
+    deadline = task.get("deadline")
     system_prompt = ASK_SYSTEM_PROMPT.format(
         task_title=task.get("title", "Unknown task"),
+        task_deadline=deadline or "none stated",
+        time_left=_time_until(deadline),
         topic_context=_topic_context(topic),
     )
 

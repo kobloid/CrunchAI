@@ -55,7 +55,7 @@ def submit_situation(situation: SituationInput):
         summary=plan.summary,
     )
     for task in plan.tasks:
-        db.create_task(plan_id, task.title, task.duration_minutes, task.priority)
+        db.create_task(plan_id, task.title, task.duration_minutes, task.priority, task.deadline)
 
     return _load_plan_out(plan_id)
 
@@ -111,7 +111,7 @@ def update_task(task_id: int, update: TaskUpdate):
     db.mark_tasks_replaced([t["id"] for t in remaining])
     db.update_plan_meta(plan_id, revised.urgency.value, revised.summary)
     for task in revised.tasks:
-        db.create_task(plan_id, task.title, task.duration_minutes, task.priority)
+        db.create_task(plan_id, task.title, task.duration_minutes, task.priority, task.deadline)
 
     return {"ok": True, "replanned": True, "plan": _load_plan_out(plan_id)}
 
