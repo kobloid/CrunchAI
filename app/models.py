@@ -8,7 +8,8 @@ Purpose:
     exactly one definition of "what a plan looks like."
 
 Interacts with:
-    - planner.py   -> validates Gemini's raw JSON response against PlanOutput
+    - planner.py   -> validates Gemini's raw JSON response against PlanOutput,
+                      Quiz, and QuizGrade
     - main.py      -> used as request bodies / response_models on routes
     - db.py        -> rows are converted to/from these models when
                       reading/writing tasks, plans, and sessions
@@ -40,11 +41,17 @@ class TaskStatus(str, Enum):
 class SituationInput(BaseModel):
     description: str = Field(..., description="Student's free-text description of their situation")
     available_minutes: int = Field(..., gt=0, description="How much time the student has right now")
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 class TaskUpdate(BaseModel):
     status: TaskStatus
     actual_minutes: Optional[int] = None
+    commitment: Optional[str] = Field(None, description="What the student said they'd get done this block")
+    away_minutes: Optional[int] = Field(None, ge=0, description="Minutes spent off the tab while focus lock was on")
+    quiz_correct: Optional[int] = Field(None, ge=0)
+    quiz_total: Optional[int] = Field(None, ge=0)
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 # ---- Produced by planner.py (and validated against Gemini's output) ----
@@ -107,10 +114,53 @@ class AskRequest(BaseModel):
     topic_id: Optional[int] = None
     question: str
     history: list[ChatMessage] = Field(default_factory=list)
+    client_now: Optional[str] = Field(None, description="Student's local time as ISO 8601 with offset, so deadlines match their clock")
 
 
 class AskResponse(BaseModel):
     answer: str
+
+
+# ---- Prove-it quiz (recall check at the end of a focus block) ----
+
+class QuizRequest(BaseModel):
+    task_id: int
+    topic_id: Optional[int] = None
+    commitment: Optional[str] = None
+
+
+class Quiz(BaseModel):
+    questions: list[str] = Field(..., min_length=1, max_length=5)
+
+
+class QuizGradeRequest(BaseModel):
+    task_id: int
+    topic_id: Optional[int] = None
+    questions: list[str] = Field(..., min_length=1, max_length=5)
+    answers: list[str]
+
+
+class Grade(str, Enum):
+    CORRECT = "correct"
+    PARTIAL = "partial"
+    WRONG = "wrong"
+
+
+class Verdict(str, Enum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    SKIPPED = "skipped"
+
+
+class QuestionGrade(BaseModel):
+    grade: Grade
+    feedback: str
+
+
+class QuizGrade(BaseModel):
+    results: list[QuestionGrade]
+    verdict: Verdict
+    summary: str
 
 
 class PromptOut(BaseModel):
@@ -122,13 +172,72 @@ class PromptOut(BaseModel):
     answer: str
 
 
-class UserCreate(BaseModel):
-    username: str
-    password: str = Field(..., min_length=8, description="Plaintext; main.py hashes before storing")
+# ---- Users and auth ----
+
+class GuestClaim(BaseModel):
+    """Guest work to attach to the account at sign-up or log-in."""
+    claim_plan_id: Optional[int] = None
+    claim_topic_ids: list[int] = Field(default_factory=list)
+
+
+class UserCreate(GuestClaim):
+    username: str = Field(..., pattern=r"^[A-Za-z0-9_.]{3,24}$", description="3 to 24 letters, numbers, dots or underscores")
+    password: str = Field(..., min_length=8, max_length=128, description="Plaintext; main.py hashes before storing")
     email: Optional[str] = None
+
+
+class LoginRequest(GuestClaim):
+    username: str
+    password: str
 
 
 class UserOut(BaseModel):
     id: int
     username: str
     email: Optional[str] = None
+
+
+class MeOut(BaseModel):
+    user: Optional[UserOut] = None
+
+
+# ---- Progress page ----
+
+class PlanSummary(BaseModel):
+    id: int
+    created_at: str
+    urgency: Optional[str] = None
+    summary: Optional[str] = None
+    open_tasks: int = 0
+    addressed_tasks: int = 0
+    next_task: Optional[str] = None
+
+
+class Block(BaseModel):
+    id: int
+    completed_at: Optional[str] = None
+    actual_minutes: Optional[int] = None
+    outcome: Optional[str] = None
+    commitment: Optional[str] = None
+    away_minutes: Optional[int] = None
+    quiz_correct: Optional[int] = None
+    quiz_total: Optional[int] = None
+    task_title: str
+    plan_id: int
+
+
+class ProgressTotals(BaseModel):
+    blocks: int
+    focused_minutes: int
+    completed: int
+    partial: int
+    skipped: int
+    recall_correct: int
+    recall_total: int
+
+
+class ProgressOut(BaseModel):
+    user: UserOut
+    totals: ProgressTotals
+    plans: list[PlanSummary]
+    blocks: list[Block]
