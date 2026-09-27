@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     duration_minutes INTEGER,
     priority INTEGER,
+    deadline TEXT,
     status TEXT DEFAULT 'pending',
     FOREIGN KEY (plan_id) REFERENCES plans (id)
 );
@@ -106,12 +107,12 @@ def get_plan(plan_id: int):
 
 # ---- Tasks ----
 
-def create_task(plan_id: int, title: str, duration_minutes: int, priority: int) -> int:
+def create_task(plan_id: int, title: str, subject: str, difficulty: int, duration_minutes: int, priority: int, deadline: str | None = None) -> int:
     with get_connection() as conn:
         cur = conn.execute(
-            """INSERT INTO tasks (plan_id, title, duration_minutes, priority)
-               VALUES (?, ?, ?, ?)""",
-            (plan_id, title, duration_minutes, priority),
+            """INSERT INTO tasks (plan_id, title, subject, difficulty, duration_minutes, priority, deadline)
+               VALUES (?, ?, ?, ?, ?)""",
+            (plan_id, title, duration_minutes, priority, deadline),
         )
         return cur.lastrowid
 
