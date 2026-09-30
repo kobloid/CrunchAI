@@ -4,7 +4,7 @@
 
 CrunchAI is an AI-powered academic recovery assistant for students who are reactively procrastinating. Describe your situation and how much time you have, and CrunchAI turns the overwhelm into a short, prioritized plan, then walks you through it one focus block at a time. It started as a UMBC hackathon project.
 
-<!-- Add a screenshot or demo GIF here, e.g. ![CrunchAI](docs/screenshot.png) -->
+<img width="632" height="168" alt="Screenshot 2026-09-28 135730" src="https://github.com/user-attachments/assets/406317f6-fff4-4a63-b6a8-99fcf487b54b" />
 
 ## Features
 
