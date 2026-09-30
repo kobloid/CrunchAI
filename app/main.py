@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google.genai import errors as genai_errors
 from pydantic import ValidationError
+from contextlib import asynccontextmanager
 
 from app import db, planner
 from app.models import (
@@ -53,9 +54,13 @@ SESSION_COOKIE = "crunch_session"
 SESSION_DAYS = 30
 
 
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     db.init_db()
+    yield
+
+
+app = FastAPI(title="CrunchAI", lifespan=lifespan)
 
 
 # ---- Error handling ----
